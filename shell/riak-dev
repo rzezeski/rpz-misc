@@ -1,0 +1,52 @@
+#!/bin/bash
+#
+# A script to aid with Riak development.
+
+CMD=$1
+
+usage() {
+    echo "TODO: add usage"
+}
+
+error() {
+    msg=$1
+
+    echo $msg
+    exit 1
+}
+
+log() {
+    msg=$1
+    echo $msg
+}
+
+setup_gitcache() {
+    if [ -e ~/gitcache ]; then
+        error "gitcache exists already"
+    fi
+
+    gc_dir=~/gitcache
+    cd ~/
+    git clone git@github.com:basho/gitcache.git
+    cd $gc_dir
+    mkdir riak
+    cd riak
+    git init --bare
+    sh ../add_riak_repos.sh
+    git fetch --all
+
+    echo "" >> ~/.bashrc
+    echo ". $gc_dir/setup.sh" >> ~/.bashrc
+
+    log "gitcache setup successfully"
+}
+
+case $CMD in
+    setup-gitcache)
+        setup_gitcache
+        ;;
+    *)
+        usage
+        error "command $CMD not understood"
+        ;;
+esac
