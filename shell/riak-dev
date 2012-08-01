@@ -1,17 +1,23 @@
 #!/bin/bash
 #
 # A script to aid with Riak development.
-
-CMD=$1
+#
+#>Usage:
+#>    riak-dev [OPTIONS] command [ARGS]
+#>
+#>Examples:
+#>    riak-dev --devrel put num-keys=100
 
 usage() {
-    echo "TODO: add usage"
+    echo
+    grep '^#>' $0 | tr -d '#>'
 }
 
 error() {
     msg=$1
 
     echo $msg
+    usage
     exit 1
 }
 
@@ -41,7 +47,29 @@ setup_gitcache() {
     log "gitcache setup successfully"
 }
 
+while test $# -gt 0
+do
+    case $1 in
+        --devrel)
+            devrel=yes
+            ;;
+        -*)
+            error "Unrecognized option: $1"
+            ;;
+        *)
+            break
+            ;;
+    esac
+    shift
+done
+
+CMD=$1
+shift
+
 case $CMD in
+    put)
+        $BASHO_BENCH $TOOLS_HOME/bench_cfgs/put.config
+        ;;
     setup-gitcache)
         setup_gitcache
         ;;
