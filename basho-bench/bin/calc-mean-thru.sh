@@ -12,4 +12,4 @@ RESULTS_DIR=$1
 echo -n "Mean ops/s for $RESULTS_DIR: "
 # Don't include the header, 1st result or last result
 sed -e '1,4d' -e '$d' $RESULTS_DIR/summary.csv | \
-    awk -F, 'NR != 1 { total += $4/$2 } END { printf("%f\n", total / NR) }'
+    awk -F, '{ secs += $2; ops += $4 } END { printf("%f\n", ops / secs) }'
