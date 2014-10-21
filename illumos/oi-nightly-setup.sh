@@ -360,7 +360,7 @@ sudo reboot
 When you are done testing you can get back into the previous BE by
 using beadm to mark it active and reboot again.
 
-beadm activate openindiana
+sudo beadm activate openindiana
 sudo reboot
 
 # ############################################################################
