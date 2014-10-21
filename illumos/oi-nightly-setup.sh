@@ -54,6 +54,26 @@ clone_illumos()
 }
 
 #
+# Copy files into the appropriate place.  Assumes it's in $GATE_DIR.
+#
+copy_files()
+{
+    set -e
+    info "Copying nightly.sh"
+    if [ ! -f nightly.sh ]; then
+        cp ./usr/src/tools/scripts/nightly.sh .
+        info "Copied nightly.sh"
+    fi
+
+    info "Check execute bit on nightly.sh"
+    if [ ! -x nightly.sh ]; then
+        chmod +x nightly.sh
+        info "Granted execute bit on nightly.sh"
+    fi
+    set +e
+}
+
+#
 # Get closed binaries needed for building nightly.
 #
 # This assumes that if the dirs are there that the contents are
@@ -387,3 +407,4 @@ get_closed_bins
 setup_illumos_sh
 link_gnu_egrep
 link_gcc_libs
+copy_files
