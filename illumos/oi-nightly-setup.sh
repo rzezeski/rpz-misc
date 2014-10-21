@@ -21,7 +21,6 @@
 #
 # Piotr Jasiukajtis
 # Robert Mustacchi
-set -e
 
 # ############################################################################
 # Variables
@@ -38,10 +37,11 @@ VERSION="1.0.0 2014-10-20T15:03:39 3025ea091e2f2f4836c5df8ab537bbd16cbf22ca"
 # ############################################################################
 clone_illumos()
 {
+    set -e
     info "Checking for $CODE_DIR dir"
     if [ ! -d $CODE_DIR ]; then
         sudo mkdir /code
-        sudo chmod $LOGNAME:staff /code
+        sudo chown $LOGNAME:staff /code
         info "Directory /code created with ownership $LOGNAME:staff"
     fi
 
@@ -50,6 +50,7 @@ clone_illumos()
         cd $CODE_DIR
         git clone git://github.com/illumos/illumos-gate.git
     fi
+    set +e
 }
 
 #
@@ -61,6 +62,7 @@ clone_illumos()
 #
 get_closed_bins()
 {
+    set -e
     echo "Checking for closed binaries"
     if [ ! -d closed/root_i386 ]; then
         [ ! -f on-closed-bins.i386.tar.bz2 ] && wget -c $CLOSED_BIN_URL
@@ -71,6 +73,7 @@ get_closed_bins()
         [ ! -f on-closed-bins-nd.i386.tar.bz2 ] && wget -c $CLOSED_BIN_ND_URL
         tar xjvpf on-closed-bins-nd.i386.tar.bz2
     fi
+    set +e
 }
 
 #
@@ -133,16 +136,18 @@ install_pkgs()
 #
 link_gcc_libs()
 {
+    set -e
     info "Checking for GCC libs"
     if [ ! -h /usr/lib/libgcc_s.so.1 ]; then
-        ln -s /opt/gcc/4.4.4/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
+        sudo ln -s /opt/gcc/4.4.4/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
         info "Linked /usr/lib/libgcc_s.so.1 to /opt/gcc/4.4.4/lib/libgcc_s.so.1"
     fi
 
     if [ ! -h /usr/lib/libstdc++.so.6 ]; then
-        ln -s /opt/gcc/4.4.4/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6
+        sudo ln -s /opt/gcc/4.4.4/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6
         info "Linked /usr/lib/libstdc++.so.6 to /opt/gcc/4.4.4/lib/libstdc++.so.6"
     fi
+    set +e
 }
 
 #
@@ -151,12 +156,14 @@ link_gcc_libs()
 #
 link_gnu_egrep()
 {
+    set -e
     info "Checking /usr/bin/egrep"
     if [ "$(readlink $(which egrep))" != "/usr/gnu/bin/egrep" ]; then
         sudo mv /usr/bin/egrep /usr/bin/egrep-old
         sudo ln -s /usr/gnu/bin/egrep /usr/bin/egrep
         info "Linked /usr/bin/egrep to /usr/gnu/bin/egrep"
     fi
+    set +e
 }
 
 #
@@ -167,6 +174,7 @@ link_gnu_egrep()
 #
 setup_illumos_sh()
 {
+    set -e
     info "Checking for illumos.sh"
     if [ ! -f "illumos.sh" ]; then
         cp usr/src/tools/env/illumos.sh .
@@ -188,6 +196,161 @@ setup_illumos_sh()
 
         info "Configured illumos.sh"
     fi
+    set +e
+}
+
+#
+# Display usage statement.
+#
+usage()
+{
+    printf \
+        "
+Usage: ./oi-nightly-setup.sh [-Vh]
+
+# ############################################################################
+# Summary
+# ############################################################################
+
+This script is built specifically to setup an OpenIndiana (aka OI)
+machine for running a nightly build of illumos-gate.  This needs to be
+done when you want to test your patches for illumos-gate before
+upstreaming them.
+
+This script is intended for the _beginner_ who wants to test a patch
+without going through the fuss of manual setup (which can be confusing
+because instructions are out of date and everyone who helps you has
+their own method).  If you are a more advanced user then you probably
+shouldn't use this script.
+
+This setup follows the instructions on the Illumos wiki but includes
+steps that it doesn't mention.  This script assumes you are using a
+fresh install of OI 151a8 and may not work under any other
+circumstances.
+
+http://wiki.illumos.org/display/illumos/How+To+Build+illumos
+
+This script is idempotent; you can re-run it without ill effect.  If
+something in the process fails midway you should be able to revert or
+delete that partial change and re-run this script.
+
+# ############################################################################
+# Terminology
+# ############################################################################
+
+The jargon of Illumos land...
+
+* ON: OS/Network, this is the kernel, libc, network, system libs and
+  system commands that make up the core of any Illumos distro.  This
+  is what you are building when you build illumos-gate.
+
+* Distro: A distribution based on illumos-gate (ON).  These include
+  OpenIndiana, SmartOS, and OmniOS, to name a few.
+
+* nightly: This is nightly.sh, the script the builds ON.
+
+* onu: ON Update, this is a script that takes your build of ON and
+  creates a new BE that you can boot into and test it.
+
+* BE: Boot Environment, this is the environment from which the entire
+  operating system runs.  It's also linked to IPS which is the Image
+  Packaging System.  As a beginner, the main thing to understand is
+  that testing kernel/libc changes require you to boot into a new BE
+  which is created by the onu script.
+
+* osnet consolidation/incorporation: This is the entire list of
+  packages that make up your BE.  IPS and onu use this special package
+  to create your new BE.
+
+* beadm: BE admin, this is the command to administrate your BEs.
+
+# ############################################################################
+# Build Instructions
+# ############################################################################
+
+Building illumos-gate is a four stage affair.
+
+*** 1. Setup
+
+The first step is the initial setup which this script does on your
+behalf.  Once this script has run successfully, the entire way
+through, there should be no reason to re-run it unless you decide to
+delete or change something required to perform the nightly build.
+
+./oi-nightly-setup.sh
+
+*** 2. Modification
+
+Before building nightly you'll want to make your modifications.
+However, you could build ON first, then make your changes, and then
+perform an incremental build (discussed in section 3).
+
+*** 3. Build (\"nightly\") - run the nightly.sh script
+
+To build the entire kit & caboodle run:
+
+cd /code/illumos-gate
+./nightly.sh illumos.sh
+
+To watch progress:
+
+tail -f log/nightly.log
+
+After the build has finished verify the exit status was 0.  If it
+wasn't check for the patten '***' in your nightly.log and check the
+mail_msg.
+
+grep '\*\*\*' log/log<ts>/nightly.log
+less log/log<ts>/mail_msg
+
+If you fix something and need to rebuild but don't want to rebuild
+everything then you can do an incremental build.
+
+./nightly.sh -i illumos.sh
+
+You can also cd into the subdir and build things directly, but at that
+point you are becoming more advanced and should see the further
+reading section.
+
+4. Boot new BE (optional) - if required, boot into new BE
+
+Once you have a successful build the safest way to test your change is
+to boot into a new BE that includes your changes.  You don't always
+need to do this, e.g. say you only change a command.
+
+https://us-east.manta.joyent.com/rmustacc/public/iondg/workflow.html#testing
+
+Use the onu script to create the new BE with your freshly built
+packages.
+
+cd /code/illumos-gate
+sudo ./usr/src/tools/scripts/onu -t nightly-1 -d packages/i386/nightly
+
+It will create the new BE, update it to your osnet-incorporation, and
+then mark it as active.  You can verify with beadm.
+
+beadm list
+
+At that point you just need to reboot and test your change.
+
+sudo reboot
+
+When you are done testing you can get back into the previous BE by
+using beadm to mark it avtive and reboot again.
+
+beadm activate openindiana
+sudo reboot
+
+# ############################################################################
+# Further Reading
+# ############################################################################
+
+http://wiki.illumos.org/display/illumos/How+To+Build+illumos
+
+https://us-east.manta.joyent.com/rmustacc/public/iondg/workflow.html
+
+"
+
 }
 
 #
@@ -202,9 +365,13 @@ version()
 # ############################################################################
 # Main
 # ############################################################################
-while getopts 'V(version)' opt
+while getopts 'V(version)h(help)' opt
 do
     case $opt in
+        h)
+            usage
+            exit 0
+            ;;
         V)
             version
             ;;
