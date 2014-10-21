@@ -159,11 +159,13 @@ link_gcc_libs()
     set -e
     info "Checking for GCC libs"
     if [ ! -h /usr/lib/libgcc_s.so.1 ]; then
+        sudo ln -s /opt/gcc/4.4.4/lib/amd64/libgcc_s.so.1 /usr/lib/amd64/libgcc_s.so.1
         sudo ln -s /opt/gcc/4.4.4/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
         info "Linked /usr/lib/libgcc_s.so.1 to /opt/gcc/4.4.4/lib/libgcc_s.so.1"
     fi
 
     if [ ! -h /usr/lib/libstdc++.so.6 ]; then
+        sudo ln -s /opt/gcc/4.4.4/lib/amd64/libstdc++.so.6 /usr/lib/amd64/libstdc++.so.6
         sudo ln -s /opt/gcc/4.4.4/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6
         info "Linked /usr/lib/libstdc++.so.6 to /opt/gcc/4.4.4/lib/libstdc++.so.6"
     fi
@@ -310,14 +312,14 @@ perform an incremental build (discussed in section 3).
 To build the entire kit & caboodle run:
 
 cd /code/illumos-gate
-./nightly.sh illumos.sh
+./nightly.sh illumos.sh || echo \"BUILD FAILED -- CHECK LOGS\"
 
 To watch progress:
 
 tail -f log/nightly.log
 
 After the build has finished verify the exit status was 0.  If it
-wasn't check for the patten '***' in your nightly.log and check the
+wasn't check for the pattern '***' in your nightly.log and check the
 mail_msg.
 
 grep '\*\*\*' log/log<ts>/nightly.log
@@ -326,7 +328,7 @@ less log/log<ts>/mail_msg
 If you fix something and need to rebuild but don't want to rebuild
 everything then you can do an incremental build.
 
-./nightly.sh -i illumos.sh
+./nightly.sh -i illumos.sh || echo \"BUILD FAILED -- CHECK LOGS\"
 
 You can also cd into the subdir and build things directly, but at that
 point you are becoming more advanced and should see the further
@@ -356,7 +358,7 @@ At that point you just need to reboot and test your change.
 sudo reboot
 
 When you are done testing you can get back into the previous BE by
-using beadm to mark it avtive and reboot again.
+using beadm to mark it active and reboot again.
 
 beadm activate openindiana
 sudo reboot
