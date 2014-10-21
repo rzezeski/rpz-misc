@@ -332,7 +332,7 @@ You can also cd into the subdir and build things directly, but at that
 point you are becoming more advanced and should see the further
 reading section.
 
-4. Boot new BE (optional) - if required, boot into new BE
+*** 4. Boot new BE (optional) - if required, boot into new BE
 
 Once you have a successful build the safest way to test your change is
 to boot into a new BE that includes your changes.  You don't always
