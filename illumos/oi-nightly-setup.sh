@@ -30,7 +30,7 @@ CLOSED_BIN_ND_URL="http://dlc.sun.com/osol/on/downloads/20100817/on-closed-bins-
 CODE_DIR=/code
 GATE=illumos-gate
 GATE_DIR="$CODE_DIR/$GATE"
-VERSION="1.0.1 2014-10-23T00:21:46 0b7a678708a86ca3e26f0cdf454ce00ad7e40083"
+VERSION="1.0.2 2014-10-23T01:11:58 4ebf6a9f27e8ab4788c211756dc43ccce84d66eb"
 
 # ############################################################################
 # Functions
@@ -410,6 +410,9 @@ setup_illumos_sh()
 usage()
 {
     printf "Usage: ./oi-nightly-setup.sh [-Vhp]
+
+-b, --brief
+        Print brief build instructions.
 
 -V, --version
         Print the version string.
