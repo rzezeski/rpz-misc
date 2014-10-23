@@ -30,11 +30,53 @@ CLOSED_BIN_ND_URL="http://dlc.sun.com/osol/on/downloads/20100817/on-closed-bins-
 CODE_DIR=/code
 GATE=illumos-gate
 GATE_DIR="$CODE_DIR/$GATE"
-VERSION="1.0.0 2014-10-20T15:03:39 3025ea091e2f2f4836c5df8ab537bbd16cbf22ca"
+VERSION="1.0.1 2014-10-23T00:21:46 0b7a678708a86ca3e26f0cdf454ce00ad7e40083"
 
 # ############################################################################
 # Functions
 # ############################################################################
+
+#
+# Print brief overview of build steps.
+brief()
+{
+    printf "
+*** Setup
+
+$ ./oi-nightly-setup.sh
+
+*** Build Nightly
+
+$ cd /code/illumos-gate
+$ ./nightly.sh illumos.sh || echo \"BUILD FAILED -- CHECK LOGS\"
+$ tail -f log/nightly.log
+
+*** Check Logs
+
+$ grep '***' log/log.<ts>/nightly.log
+$ less log/log<ts>/mail_msg
+
+*** ON Update & Boot into Nightly BE
+
+$ sudo ./usr/src/tools/scripts/onu -t nightly -d packages/i386/nightly
+$ beadm list
+$ sudo reboot
+
+*** Return to Previous BE
+
+$ sudo beadm activate openindiana
+$ sudo reboot
+
+*** Destory Nightly BE if Rebuilding
+
+$ sudo beadm destroy nightly
+
+"
+}
+
+#
+# Clone the illumos-gate (ON) source code.
+#
 clone_illumos()
 {
     set -e
@@ -189,6 +231,147 @@ link_gnu_egrep()
 }
 
 #
+# Display build instructions.
+#
+print_instructions()
+{
+    printf "
+
+# ############################################################################
+# Summary
+# ############################################################################
+
+This script is built specifically to setup a _fresh_ install of
+OpenIndiana (aka OI) for running a nightly build of illumos-gate.  It
+is intended for the _beginner_ who wants to test a patch without going
+through the fuss of manual setup.  The instructions on the Illumos
+wiki are followed as closely as possible.  This script has only been
+tested on OI 151a8 and may not work under other circumstances.
+
+This script is idempotent; you can re-run it without ill effect.  If
+something in the process fails midway you should be able to revert or
+delete that partial change and re-run this script.
+
+# ############################################################################
+# Terminology
+# ############################################################################
+
+The jargon of Illumos land...
+
+* ON: OS/Network, this is the kernel, libc, network, system libs and
+  system commands that make up the core of any Illumos distro.  This
+  is what you are building when you build illumos-gate.
+
+* Distribution: A distribution based on illumos-gate (ON).  These
+  include OpenIndiana, SmartOS, and OmniOS, to name a few.
+
+* nightly: This is nightly.sh, the script the builds ON.
+
+* ONU: ON Update, this is a script that creates a new BE from the ON
+  build.
+
+* BE: Boot Environment, this is the environment from which the entire
+  operating system runs.  It's also linked to IPS which is the Image
+  Packaging System.  As a beginner, the main thing to understand is
+  that testing kernel/libc changes require you to boot into a new BE
+  which is created by the onu script.
+
+* osnet consolidation/incorporation: The list of packages that make up
+  ON. ONU tells IPS to update this consolidation package which causes
+  all the appropriate packages to upgrade in lock step so you can test
+  your new ON.
+
+* IPS or Image Packaging System - The program that manages the
+  packages.
+
+* beadm: BE admin, used to administrate BEs.
+
+# ############################################################################
+# Build Instructions
+# ############################################################################
+
+*** 1. Setup
+
+The first step is the initial setup which this script does on your
+behalf.  Once this script has run successfully, the entire way
+through, there should be no reason to re-run it unless you decide to
+delete or change something required to perform the nightly build.
+
+$ ./oi-nightly-setup.sh
+
+*** 2. Modify
+
+Before building nightly you'll want to make your modifications.
+However, you could build ON first, then make your changes, and then
+perform an incremental build (discussed in section 3).
+
+*** 3. Build
+
+Run the nightly.sh script to build ON.
+
+$ cd /code/illumos-gate
+$ ./nightly.sh illumos.sh || echo \"BUILD FAILED -- CHECK LOGS\"
+
+Tail the nightly log to monitor progress.
+
+$ tail -f log/nightly.log
+
+When the build has finished the nightly log will be moved to a
+timestamped dir and a mail_msg summary will be written.  If the build
+returns a non-zero exit status you'll want to check both files.
+
+$ grep '\*\*\*' log/log.<ts>/nightly.log
+$ less log/log<ts>/mail_msg
+
+If you fix something and need to rebuild but don't want to rebuild
+everything then you can do an incremental build.
+
+$ ./nightly.sh -i illumos.sh || echo \"BUILD FAILED -- CHECK LOGS\"
+
+You can also cd into the subdir and build things directly, but at that
+point you are becoming more advanced and should see the further
+reading section.
+
+*** 4. Boot nightly BE
+
+Once you have a successful build the safest way to test your change is
+to boot into a new BE that includes your changes.  You don't always
+need to do this, e.g. say you only change a command.
+
+https://us-east.manta.joyent.com/rmustacc/public/iondg/workflow.html#testing
+
+Use the onu script to create the nightly BE with your freshly built
+packages.
+
+$ sudo ./usr/src/tools/scripts/onu -t nightly -d packages/i386/nightly
+
+ONU creates the nightly BE, updates the osnet-incorporation, and then
+marks the new BE as active.
+
+$ beadm list
+
+At that point you just need to reboot and test your change.
+
+$ sudo reboot
+
+When you are done testing you can get back into the previous BE by
+using beadm to mark it active and reboot again.
+
+$ sudo beadm activate openindiana
+$ sudo reboot
+
+# ############################################################################
+# Further Reading
+# ############################################################################
+
+* http://wiki.illumos.org/display/illumos/How+To+Build+illumos
+* https://us-east.manta.joyent.com/rmustacc/public/iondg/workflow.html
+
+"
+
+}
+
+#
 # Copy and configure illumos.sh to be used with the nightly build.
 # This step will not proceed if $GATE_DIR/illumos.sh already eixsts.
 #
@@ -226,153 +409,18 @@ setup_illumos_sh()
 #
 usage()
 {
-    printf \
-        "
-Usage: ./oi-nightly-setup.sh [-Vh]
+    printf "Usage: ./oi-nightly-setup.sh [-Vhp]
 
-# ############################################################################
-# Summary
-# ############################################################################
+-V, --version
+        Print the version string.
 
-This script is built specifically to setup an OpenIndiana (aka OI)
-machine for running a nightly build of illumos-gate.  This needs to be
-done when you want to test your patches for illumos-gate before
-upstreaming them.
+-h, --help
+        Print the usage statement.
 
-This script is intended for the _beginner_ who wants to test a patch
-without going through the fuss of manual setup (which can be confusing
-because instructions are out of date and everyone who helps you has
-their own method).  If you are a more advanced user then you probably
-shouldn't use this script.
-
-This setup follows the instructions on the Illumos wiki but includes
-steps that it doesn't mention.  This script assumes you are using a
-fresh install of OI 151a8 and may not work under any other
-circumstances.
-
-http://wiki.illumos.org/display/illumos/How+To+Build+illumos
-
-This script is idempotent; you can re-run it without ill effect.  If
-something in the process fails midway you should be able to revert or
-delete that partial change and re-run this script.
-
-# ############################################################################
-# Terminology
-# ############################################################################
-
-The jargon of Illumos land...
-
-* ON: OS/Network, this is the kernel, libc, network, system libs and
-  system commands that make up the core of any Illumos distro.  This
-  is what you are building when you build illumos-gate.
-
-* Distro: A distribution based on illumos-gate (ON).  These include
-  OpenIndiana, SmartOS, and OmniOS, to name a few.
-
-* nightly: This is nightly.sh, the script the builds ON.
-
-* onu: ON Update, this is a script that takes your build of ON and
-  creates a new BE that you can boot into and test it.
-
-* BE: Boot Environment, this is the environment from which the entire
-  operating system runs.  It's also linked to IPS which is the Image
-  Packaging System.  As a beginner, the main thing to understand is
-  that testing kernel/libc changes require you to boot into a new BE
-  which is created by the onu script.
-
-* osnet consolidation/incorporation: This is the entire list of
-  packages that make up your BE.  IPS and onu use this special package
-  to create your new BE.
-
-* beadm: BE admin, this is the command to administrate your BEs.
-
-# ############################################################################
-# Build Instructions
-# ############################################################################
-
-Building illumos-gate is a four stage affair.
-
-*** 1. Setup
-
-The first step is the initial setup which this script does on your
-behalf.  Once this script has run successfully, the entire way
-through, there should be no reason to re-run it unless you decide to
-delete or change something required to perform the nightly build.
-
-./oi-nightly-setup.sh
-
-*** 2. Modification
-
-Before building nightly you'll want to make your modifications.
-However, you could build ON first, then make your changes, and then
-perform an incremental build (discussed in section 3).
-
-*** 3. Build (\"nightly\") - run the nightly.sh script
-
-To build the entire kit & caboodle run:
-
-cd /code/illumos-gate
-./nightly.sh illumos.sh || echo \"BUILD FAILED -- CHECK LOGS\"
-
-To watch progress:
-
-tail -f log/nightly.log
-
-After the build has finished verify the exit status was 0.  If it
-wasn't check for the pattern '***' in your nightly.log and check the
-mail_msg.
-
-grep '\*\*\*' log/log<ts>/nightly.log
-less log/log<ts>/mail_msg
-
-If you fix something and need to rebuild but don't want to rebuild
-everything then you can do an incremental build.
-
-./nightly.sh -i illumos.sh || echo \"BUILD FAILED -- CHECK LOGS\"
-
-You can also cd into the subdir and build things directly, but at that
-point you are becoming more advanced and should see the further
-reading section.
-
-*** 4. Boot new BE (optional) - if required, boot into new BE
-
-Once you have a successful build the safest way to test your change is
-to boot into a new BE that includes your changes.  You don't always
-need to do this, e.g. say you only change a command.
-
-https://us-east.manta.joyent.com/rmustacc/public/iondg/workflow.html#testing
-
-Use the onu script to create the new BE with your freshly built
-packages.
-
-cd /code/illumos-gate
-sudo ./usr/src/tools/scripts/onu -t nightly-1 -d packages/i386/nightly
-
-It will create the new BE, update it to your osnet-incorporation, and
-then mark it as active.  You can verify with beadm.
-
-beadm list
-
-At that point you just need to reboot and test your change.
-
-sudo reboot
-
-When you are done testing you can get back into the previous BE by
-using beadm to mark it active and reboot again.
-
-sudo beadm activate openindiana
-sudo reboot
-
-# ############################################################################
-# Further Reading
-# ############################################################################
-
-http://wiki.illumos.org/display/illumos/How+To+Build+illumos
-
-https://us-east.manta.joyent.com/rmustacc/public/iondg/workflow.html
+-p, --print
+        Print the build instructions.
 
 "
-
 }
 
 #
@@ -387,11 +435,19 @@ version()
 # ############################################################################
 # Main
 # ############################################################################
-while getopts 'V(version)h(help)' opt
+while getopts 'V(version)h(help)p(print)b(brief)' opt
 do
     case $opt in
+        b)
+            brief
+            exit 0
+            ;;
         h)
             usage
+            exit 0
+            ;;
+        p)
+            print_instructions
             exit 0
             ;;
         V)
