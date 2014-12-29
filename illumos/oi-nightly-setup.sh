@@ -25,12 +25,12 @@
 # ############################################################################
 # Variables
 # ############################################################################
-CLOSED_BIN_URL="http://dlc.sun.com/osol/on/downloads/20100817/on-closed-bins.i386.tar.bz2"
-CLOSED_BIN_ND_URL="http://dlc.sun.com/osol/on/downloads/20100817/on-closed-bins-nd.i386.tar.bz2"
+CLOSED_BIN_URL="https://download.joyent.com/pub/build/illumos/on-closed-bins.i386.tar.bz2"
+CLOSED_BIN_ND_URL="https://download.joyent.com/pub/build/illumos/on-closed-bins-nd.i386.tar.bz2"
 CODE_DIR=/code
 GATE=illumos-gate
 GATE_DIR="$CODE_DIR/$GATE"
-VERSION="1.0.2 2014-10-23T01:11:58 4ebf6a9f27e8ab4788c211756dc43ccce84d66eb"
+VERSION="1.0.3 2014-12-28T22:47:07 ea134d9804bfcf14b770cc2b57fac5a3cf47e262"
 
 # ############################################################################
 # Functions
