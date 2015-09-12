@@ -1,21 +1,20 @@
 #!/bin/sh
 #
-# A script to prepare OpenIndiana for a nightly build of illumos-gate.
-# For best results use the latest stable OI release.  This is intended
-# for someone new to Illumos who just wants to test a patch without
-# the hassel of learning the intricacies of building Illumos.
+# A script to prepare OpenIndiana or OmniOS for a nightly build of
+# illumos-gate. Intended for someone new to illumos who just wants to
+# test a patch with minimum hassle.
 #
-# This script should only need to be run once but it is also built to
-# be idempotent, meaning you should be able to run it as many times as
-# you want with no ill effect.
+# This script only needs run once. But it is also idempotent. You can
+# run it many times safely.
 #
-# If you run into any issues then please share them in #illumos IRC
-# channel or on the illumos-discuss mailing list.
+# For issues with this script send an email to ryan@zinascii.com.
+#
+# For issues building illumos join the #illumos IRC channel.
 #
 # References:
 #
 # http://wiki.illumos.org/display/illumos/How+To+Build+illumos
-# https://us-east.manta.joyent.com/rmustacc/public/iondg/workflow.html
+# http://illumos.org/books/dev/workflow.html
 #
 # Thanks:
 #
@@ -28,9 +27,10 @@
 CLOSED_BIN_URL="https://download.joyent.com/pub/build/illumos/on-closed-bins.i386.tar.bz2"
 CLOSED_BIN_ND_URL="https://download.joyent.com/pub/build/illumos/on-closed-bins-nd.i386.tar.bz2"
 CODE_DIR=/code
+COMMON_TAR_OPTS="--checkpoint=256 --checkpoint-action=dot"
 GATE=illumos-gate
 GATE_DIR="$CODE_DIR/$GATE"
-VERSION="1.0.3 2014-12-28T22:47:07 ea134d9804bfcf14b770cc2b57fac5a3cf47e262"
+VERSION="2015-09-10"
 
 # ############################################################################
 # Functions
@@ -38,6 +38,7 @@ VERSION="1.0.3 2014-12-28T22:47:07 ea134d9804bfcf14b770cc2b57fac5a3cf47e262"
 
 #
 # Print brief overview of build steps.
+#
 brief()
 {
     printf "
@@ -48,7 +49,7 @@ $ ./oi-nightly-setup.sh
 *** Build Nightly
 
 $ cd /code/illumos-gate
-$ ./nightly.sh illumos.sh || echo \"BUILD FAILED -- CHECK LOGS\"
+$ /opt/onbld/bin/nightly illumos.sh || echo \"BUILD FAILED -- CHECK LOGS\"
 $ tail -f log/nightly.log
 
 *** Check Logs
@@ -75,6 +76,65 @@ $ sudo beadm destroy nightly
 }
 
 #
+# Determine the OS: set OS_NAME and OS_VSN. Fail if unsupported.
+#
+check_os()
+{
+    OS="unknown"
+
+    if [ ! -e /etc/release ]; then
+        echo "ERROR: couldn't determine OS" >&2
+    fi
+
+    if grep -i 'omnios' /etc/release > /dev/null; then
+        OS_STR=$(sed -En -e 's/^ *//g' -e '1p' /etc/release)
+        OS_NAME=$(echo $OS_STR | awk '{print $1}')
+        OS_VSN=$(echo $OS_STR | awk '{print $3}')
+    elif grep -i 'openindiana' /etc/release > /dev/null; then
+        OS_STR=$(sed -En -e 's/^ *//g' -e '1p' /etc/release)
+        OS_NAME=$(echo $OS_STR | awk '{print $1}')
+        OS_VSN=$(echo $OS_STR | awk '{print $3}')
+        if ! pkg publisher -H | grep hipster > /dev/null; then
+            echo "ERROR: Must build on OI Hipster"
+            echo "http://dlc.openindiana.org/isos/hipster/"
+            exit 1
+        fi
+    else
+        echo "ERROR: couldn't determine OS" 2>&2
+        exit 1
+    fi
+
+    case $OS_NAME in
+        OmniOS)
+            # Remove the 'r' prefix.
+            OS_VSN=$(echo $OS_VSN | tr -d r)
+
+            case $OS_VSN in
+                151014) ;;
+                *)
+                    echo "ERROR: unsupported version of \
+OmniOS: $OS_VSN" 1>&2
+                    exit 1
+                    ;;
+            esac
+            ;;
+        OpenIndiana)
+            case $OS_VSN in
+                oi_151.1.8) ;;
+                *)
+                    echo "ERROR: untested version of OI" 2>&1
+                    exit 1
+                    ;;
+            esac
+            ;;
+        *)
+            echo "ERROR: unsupported OS: $OS" 2>&2
+            exit 1
+            ;;
+    esac
+}
+
+#
 # Clone the illumos-gate (ON) source code.
 #
 clone_illumos()
@@ -82,9 +142,10 @@ clone_illumos()
     set -e
     info "Checking for $CODE_DIR dir"
     if [ ! -d $CODE_DIR ]; then
-        sudo mkdir /code
+        sudo zfs create -o mountpoint=/code rpool/code
         sudo chown $LOGNAME:staff /code
-        info "Directory /code created with ownership $LOGNAME:staff"
+        info "Filesystem rpool/code created, mounted under /code, \
+with ownership $LOGNAME:staff"
     fi
 
     info "Checking for copy of illumos-gate"
@@ -96,44 +157,26 @@ clone_illumos()
 }
 
 #
-# Copy files into the appropriate place.  Assumes it's in $GATE_DIR.
-#
-copy_files()
-{
-    set -e
-    info "Copying nightly.sh"
-    if [ ! -f nightly.sh ]; then
-        cp ./usr/src/tools/scripts/nightly.sh .
-        info "Copied nightly.sh"
-    fi
-
-    info "Check execute bit on nightly.sh"
-    if [ ! -x nightly.sh ]; then
-        chmod +x nightly.sh
-        info "Granted execute bit on nightly.sh"
-    fi
-    set +e
-}
-
-#
 # Get closed binaries needed for building nightly.
 #
 # This assumes that if the dirs are there that the contents are
 # correct.  If anything goes wrong just rm -rf the entire closed dir
 # and re-run the script.  Same goes for the tar archives.
 #
+#
+# TODO add checksums
 get_closed_bins()
 {
     set -e
     echo "Checking for closed binaries"
     if [ ! -d closed/root_i386 ]; then
         [ ! -f on-closed-bins.i386.tar.bz2 ] && wget -c $CLOSED_BIN_URL
-        tar xjvpf on-closed-bins.i386.tar.bz2
+        gtar $COMMON_TAR_OPTS -xjpf on-closed-bins.i386.tar.bz2
     fi
 
     if [ ! -d closed/root_i386-nd ]; then
         [ ! -f on-closed-bins-nd.i386.tar.bz2 ] && wget -c $CLOSED_BIN_ND_URL
-        tar xjvpf on-closed-bins-nd.i386.tar.bz2
+        gtar $COMMON_TAR_OPTS -xjpf on-closed-bins-nd.i386.tar.bz2
     fi
     set +e
 }
@@ -149,84 +192,100 @@ info()
 #
 # Install packages necessary to perform the nightly build.
 #
+COMMON_PKGS="\
+pkg:/archiver/gnu-tar \
+pkg:/developer/astdev \
+pkg:/developer/build/make \
+pkg:/developer/build/onbld \
+pkg:/developer/gnu-binutils \
+pkg:/developer/java/jdk \
+pkg:/developer/lexer/flex \
+pkg:/developer/library/lint \
+pkg:/developer/object-file \
+pkg:/developer/parser/bison \
+pkg:/developer/versioning/git \
+pkg:/developer/versioning/mercurial \
+pkg:/library/glib2 \
+pkg:/library/libxml2 \
+pkg:/library/libxslt \
+pkg:/library/nspr/header-nspr \
+pkg:/library/perl-5/xml-parser \
+pkg:/library/python-2/python-extra-26
+pkg:/library/security/trousers \
+pkg:/system/header \
+pkg:/system/library/dbus \
+pkg:/system/library/install \
+pkg:/system/library/libdbus \
+pkg:/system/library/libdbus-glib \
+pkg:/system/library/mozilla-nss/header-nss \
+pkg:/system/management/snmp/net-snmp \
+pkg:/text/gnu-gettext"
+
+OMNI_PKGS="\
+pkg:/developer/gcc44 \
+pkg:/developer/sunstudio12.1 \
+pkg:/runtime/perl \
+pkg:/runtime/perl-64 \
+pkg:/runtime/perl/module/sun-solaris \
+pkg:/system/library/math"
+
+OI_PKGS="\
+pkg:/data/docbook \
+pkg:/developer/illumos-gcc \
+pkg:/developer/opensolaris/osnet \
+pkg:/developer/sunstudio12u1 \
+pkg:/print/cups \
+pkg:/print/filter/ghostscript \
+pkg:/runtime/perl-510 \
+pkg:/runtime/perl-510/extra \
+pkg:/runtime/perl-510/module/sun-solaris \
+pkg:/system/library/math/header-math \
+pkg:/system/management/product-registry \
+pkg:/web/server/apache-22"
+
 install_pkgs()
 {
     info "Installing required packages"
-    sudo pkg install -v \
-         pkg:/data/docbook \
-         pkg:/developer/astdev \
-         pkg:/developer/build/make \
-         pkg:/developer/build/onbld \
-         pkg:/developer/illumos-gcc \
-         pkg:/developer/gnu-binutils \
-         pkg:/developer/opensolaris/osnet \
-         pkg:/developer/java/jdk \
-         pkg:/developer/lexer/flex \
-         pkg:/developer/object-file \
-         pkg:/developer/parser/bison \
-         pkg:/developer/versioning/mercurial \
-         pkg:/developer/versioning/git \
-         pkg:/developer/library/lint \
-         pkg:/library/glib2 \
-         pkg:/library/libxml2 \
-         pkg:/library/libxslt \
-         pkg:/library/nspr/header-nspr \
-         pkg:/library/perl-5/xml-parser \
-         pkg:/library/security/trousers \
-         pkg:/print/cups \
-         pkg:/print/filter/ghostscript \
-         pkg:/runtime/perl-510 \
-         pkg:/runtime/perl-510/extra \
-         pkg:/runtime/perl-510/module/sun-solaris \
-         pkg:/system/library/math/header-math \
-         pkg:/system/library/install \
-         pkg:/system/library/dbus \
-         pkg:/system/library/libdbus \
-         pkg:/system/library/libdbus-glib \
-         pkg:/system/library/mozilla-nss/header-nss \
-         pkg:/system/header \
-         pkg:/system/management/product-registry \
-         pkg:/system/management/snmp/net-snmp \
-         pkg:/text/gnu-gettext \
-         pkg:/library/python-2/python-extra-26 \
-         pkg:/web/server/apache-13 \
-         pkg:/developer/sunstudio12u1
-}
-
-#
-# Link GCC libs required for some of the libraries.
-#
-link_gcc_libs()
-{
-    set -e
-    info "Checking for GCC libs"
-    if [ ! -h /usr/lib/libgcc_s.so.1 ]; then
-        sudo ln -s /opt/gcc/4.4.4/lib/amd64/libgcc_s.so.1 /usr/lib/amd64/libgcc_s.so.1
-        sudo ln -s /opt/gcc/4.4.4/lib/libgcc_s.so.1 /usr/lib/libgcc_s.so.1
-        info "Linked /usr/lib/libgcc_s.so.1 to /opt/gcc/4.4.4/lib/libgcc_s.so.1"
-    fi
-
-    if [ ! -h /usr/lib/libstdc++.so.6 ]; then
-        sudo ln -s /opt/gcc/4.4.4/lib/amd64/libstdc++.so.6 /usr/lib/amd64/libstdc++.so.6
-        sudo ln -s /opt/gcc/4.4.4/lib/libstdc++.so.6 /usr/lib/libstdc++.so.6
-        info "Linked /usr/lib/libstdc++.so.6 to /opt/gcc/4.4.4/lib/libstdc++.so.6"
-    fi
-    set +e
+    pkgs="$COMMON_PKGS"
+    case $OS_NAME in
+        OmniOS)
+            pkgs="$pkgs $OMNI_PKGS" ;;
+        OpenIndiana)
+            pkgs="$pkgs $OI_PKGS" ;;
+    esac
+    sudo pkg install -v $pkgs
 }
 
 #
 # Replace /usr/bin/egrep with GNU egrep because nightly relies on the
-# -q option.
+# -q and -E options.
 #
 link_gnu_egrep()
 {
     set -e
     info "Checking /usr/bin/egrep"
     if [ "$(readlink $(which egrep))" != "/usr/gnu/bin/egrep" ]; then
-        sudo mv /usr/bin/egrep /usr/bin/egrep-old
-        sudo ln -s /usr/gnu/bin/egrep /usr/bin/egrep
-        info "Linked /usr/bin/egrep to /usr/gnu/bin/egrep"
+        sudo mv /usr/bin/grep /usr/bin/grep-old
+        sudo ln -s /usr/gnu/bin/grep /usr/bin/grep
+        info "Linked /usr/bin/grep to /usr/gnu/bin/grep"
     fi
+    set +e
+}
+
+#
+# Need to link /opt/SUNWspro to /opt/sunstudio12.1 so that nightly can
+# find dmake.
+#
+link_studio()
+{
+    set -e
+    case $OS_NAME in
+        OmniOS)
+            if [ "$(readlink /opt/SUNWspro)" != "/opt/sunstudio12.1/" ]; then
+                info "Linking /opt/SUNWspro to /opt/sunstudio12.1"
+                sudo ln -s /opt/sunstudio12.1/ /opt/SUNWspro
+            fi
+    esac
     set +e
 }
 
@@ -241,22 +300,21 @@ print_instructions()
 # Summary
 # ############################################################################
 
-This script is built specifically to setup a _fresh_ install of
-OpenIndiana (aka OI) for running a nightly build of illumos-gate.  It
-is intended for the _beginner_ who wants to test a patch without going
-through the fuss of manual setup.  The instructions on the Illumos
-wiki are followed as closely as possible.  This script has only been
-tested on OI 151a8 and may not work under other circumstances.
+This script is built specifically to setup OpenIndiana (aka OI) or
+OmniOS for running a nightly build of illumos-gate. It is intended for
+the beginner who wants to test a patch without going through the fuss
+of manual setup. The instructions on the illumos wiki are followed as
+closely as possible.
 
-This script is idempotent; you can re-run it without ill effect.  If
-something in the process fails midway you should be able to revert or
+This script is idempotent; multiple executions should result in the
+same end state. If something in the process fails midway you can
 delete that partial change and re-run this script.
 
 # ############################################################################
 # Terminology
 # ############################################################################
 
-The jargon of Illumos land...
+The jargon of illumos land...
 
 * ON: OS/Network, this is the kernel, libc, network, system libs and
   system commands that make up the core of any Illumos distro.  This
@@ -265,7 +323,7 @@ The jargon of Illumos land...
 * Distribution: A distribution based on illumos-gate (ON).  These
   include OpenIndiana, SmartOS, and OmniOS, to name a few.
 
-* nightly: This is nightly.sh, the script the builds ON.
+* nightly: The script the builds ON.
 
 * ONU: ON Update, this is a script that creates a new BE from the ON
   build.
@@ -307,10 +365,10 @@ perform an incremental build (discussed in section 3).
 
 *** 3. Build
 
-Run the nightly.sh script to build ON.
+Run nightly(1ONBLD) to build ON.
 
 $ cd /code/illumos-gate
-$ ./nightly.sh illumos.sh || echo \"BUILD FAILED -- CHECK LOGS\"
+$ /opt/onbld/bin/nightly illumos.sh || echo \"BUILD FAILED -- CHECK LOGS\"
 
 Tail the nightly log to monitor progress.
 
@@ -326,7 +384,7 @@ $ less log/log<ts>/mail_msg
 If you fix something and need to rebuild but don't want to rebuild
 everything then you can do an incremental build.
 
-$ ./nightly.sh -i illumos.sh || echo \"BUILD FAILED -- CHECK LOGS\"
+$ /opt/onbld/bin/nightly -i illumos.sh || echo \"BUILD FAILED -- CHECK LOGS\"
 
 You can also cd into the subdir and build things directly, but at that
 point you are becoming more advanced and should see the further
@@ -365,7 +423,7 @@ $ sudo reboot
 # ############################################################################
 
 * http://wiki.illumos.org/display/illumos/How+To+Build+illumos
-* https://us-east.manta.joyent.com/rmustacc/public/iondg/workflow.html
+* http://illumos.org/books/dev/workflow.html
 
 "
 
@@ -375,7 +433,7 @@ $ sudo reboot
 # Copy and configure illumos.sh to be used with the nightly build.
 # This step will not proceed if $GATE_DIR/illumos.sh already eixsts.
 #
-# This step assumes the CWD is $GATE_DIR.
+# Assumes the CWD is $GATE_DIR.
 #
 setup_illumos_sh()
 {
@@ -384,6 +442,7 @@ setup_illumos_sh()
     if [ ! -f "illumos.sh" ]; then
         cp usr/src/tools/env/illumos.sh .
         info "Copied illumos.sh from usr/src/tools/env/illumos.sh"
+
         sed -i -r \
             -e "s:export GATE.*:export GATE=$GATE:" \
             -e "s:export CODEMGR_WS.*:export CODEMGR_WS=$GATE_DIR:" \
@@ -393,14 +452,36 @@ setup_illumos_sh()
 
         # Use gcc for compilation
         echo "export __GNUC=''" >> illumos.sh
+        echo "unset __SUNC" >> illumos.sh
         echo "export CW_NO_SHADOW=1" >> illumos.sh
+        echo "export ONLY_LINT_DEFS=-I\${SPRO_ROOT}/sunstudio12.1/prod/include/lint" >> illumos.sh
 
-        # Make sure branch number for nightly packages is greater than
-        # host system.
-        echo "export ONNV_BUILDNUM=152.0.0" >> illumos.sh
+        # Disable IPP & SMB printing so the build doesn't fail.
+        sed -i -r \
+            -e "s:(export ENABLE_IPP_PRINTING=.*):#\1:" \
+            -e "s:(export ENABLE_SMB_PRINTING=.*):#\1:" \
+            illumos.sh
+
+        case $OS_NAME in
+            OmniOS)
+                echo "Adding OmniOS specific customizations to illumos.sh"
+                echo "export GCC_ROOT=/opt/gcc-4.4.4/" >> illumos.sh
+                echo "export PERL_VERSION=5.16.1" >> illumos.sh
+                echo "export PERL_PKGVERS=-5161" >> illumos.sh
+                echo "export PERL_ARCH=i86pc-solaris-thread-multi-64int" >> illumos.sh
+                echo "export ONNV_BUILDNUM=$OS_VSN" >> illumos.sh
+                ;;
+            OpenIndiana)
+                echo "Adding OpenIndiana specific customizations to illumos.sh"
+                # Make sure branch number for nightly packages
+                # is greater than host system.
+                echo "export ONNV_BUILDNUM=152.0.0" >> illumos.sh
+                ;;
+        esac
 
         info "Configured illumos.sh"
     fi
+
     set +e
 }
 
@@ -461,11 +542,11 @@ done
 
 shift $((OPTIND -1))
 
+check_os
 install_pkgs
 clone_illumos
 cd $GATE_DIR
 get_closed_bins
 setup_illumos_sh
 link_gnu_egrep
-link_gcc_libs
-copy_files
+link_studio
