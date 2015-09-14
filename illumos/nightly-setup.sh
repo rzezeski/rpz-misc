@@ -44,7 +44,7 @@ brief()
     printf "
 *** Setup
 
-$ ./oi-nightly-setup.sh
+$ ./nightly-setup.sh
 
 *** Build Nightly
 
@@ -355,7 +355,7 @@ behalf.  Once this script has run successfully, the entire way
 through, there should be no reason to re-run it unless you decide to
 delete or change something required to perform the nightly build.
 
-$ ./oi-nightly-setup.sh
+$ ./nightly-setup.sh
 
 *** 2. Modify
 
@@ -490,7 +490,7 @@ setup_illumos_sh()
 #
 usage()
 {
-    printf "Usage: ./oi-nightly-setup.sh [-Vhp]
+    printf "Usage: ./nightly-setup.sh [-Vhp]
 
 -b, --brief
         Print brief build instructions.
