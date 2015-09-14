@@ -41,7 +41,7 @@ VERSION="2015-09-10"
 #
 brief()
 {
-    printf "
+	printf "
 *** Setup
 
 $ ./nightly-setup.sh
@@ -80,58 +80,58 @@ $ sudo beadm destroy nightly
 #
 check_os()
 {
-    OS="unknown"
+	OS="unknown"
 
-    if [ ! -e /etc/release ]; then
-        echo "ERROR: couldn't determine OS" >&2
-    fi
+	if [ ! -e /etc/release ]; then
+		echo "ERROR: couldn't determine OS" >&2
+	fi
 
-    if grep -i 'omnios' /etc/release > /dev/null; then
-        OS_STR=$(sed -En -e 's/^ *//g' -e '1p' /etc/release)
-        OS_NAME=$(echo $OS_STR | awk '{print $1}')
-        OS_VSN=$(echo $OS_STR | awk '{print $3}')
-    elif grep -i 'openindiana' /etc/release > /dev/null; then
-        OS_STR=$(sed -En -e 's/^ *//g' -e '1p' /etc/release)
-        OS_NAME=$(echo $OS_STR | awk '{print $1}')
-        OS_VSN=$(echo $OS_STR | awk '{print $3}')
-        if ! pkg publisher -H | grep hipster > /dev/null; then
-            echo "ERROR: Must build on OI Hipster"
-            echo "http://dlc.openindiana.org/isos/hipster/"
-            exit 1
-        fi
-    else
-        echo "ERROR: couldn't determine OS" 2>&2
-        exit 1
-    fi
+	if grep -i 'omnios' /etc/release > /dev/null; then
+		OS_STR=$(sed -En -e 's/^ *//g' -e '1p' /etc/release)
+		OS_NAME=$(echo $OS_STR | awk '{print $1}')
+		OS_VSN=$(echo $OS_STR | awk '{print $3}')
+	elif grep -i 'openindiana' /etc/release > /dev/null; then
+		OS_STR=$(sed -En -e 's/^ *//g' -e '1p' /etc/release)
+		OS_NAME=$(echo $OS_STR | awk '{print $1}')
+		OS_VSN=$(echo $OS_STR | awk '{print $3}')
+		if ! pkg publisher -H | grep hipster > /dev/null; then
+			echo "ERROR: Must build on OI Hipster"
+			echo "http://dlc.openindiana.org/isos/hipster/"
+			exit 1
+		fi
+	else
+		echo "ERROR: couldn't determine OS" 2>&2
+		exit 1
+	fi
 
-    case $OS_NAME in
-        OmniOS)
-            # Remove the 'r' prefix.
-            OS_VSN=$(echo $OS_VSN | tr -d r)
+	case $OS_NAME in
+	OmniOS)
+		# Remove the 'r' prefix.
+		OS_VSN=$(echo $OS_VSN | tr -d r)
 
-            case $OS_VSN in
-                151014) ;;
-                *)
-                    echo "ERROR: unsupported version of \
+		case $OS_VSN in
+		151014) ;;
+		*)
+			echo "ERROR: unsupported version of \
 OmniOS: $OS_VSN" 1>&2
-                    exit 1
-                    ;;
-            esac
-            ;;
-        OpenIndiana)
-            case $OS_VSN in
-                oi_151.1.8) ;;
-                *)
-                    echo "ERROR: untested version of OI" 2>&1
-                    exit 1
-                    ;;
-            esac
-            ;;
-        *)
-            echo "ERROR: unsupported OS: $OS" 2>&2
-            exit 1
-            ;;
-    esac
+			exit 1
+			;;
+		esac
+		;;
+	OpenIndiana)
+		case $OS_VSN in
+		oi_151.1.8) ;;
+		*)
+			echo "ERROR: untested version of OI" 2>&1
+			exit 1
+			;;
+		esac
+		;;
+	*)
+		echo "ERROR: unsupported OS: $OS" 2>&2
+		exit 1
+		;;
+	esac
 }
 
 #
@@ -139,21 +139,21 @@ OmniOS: $OS_VSN" 1>&2
 #
 clone_illumos()
 {
-    set -e
-    info "Checking for $CODE_DIR dir"
-    if [ ! -d $CODE_DIR ]; then
-        sudo zfs create -o mountpoint=/code rpool/code
-        sudo chown $LOGNAME:staff /code
-        info "Filesystem rpool/code created, mounted under /code, \
+	set -e
+	info "Checking for $CODE_DIR dir"
+	if [ ! -d $CODE_DIR ]; then
+		sudo zfs create -o mountpoint=/code rpool/code
+		sudo chown $LOGNAME:staff /code
+		info "Filesystem rpool/code created, mounted under /code, \
 with ownership $LOGNAME:staff"
-    fi
+	fi
 
-    info "Checking for copy of illumos-gate"
-    if [ ! -d $GATE_DIR ]; then
-        cd $CODE_DIR
-        git clone git://github.com/illumos/illumos-gate.git
-    fi
-    set +e
+	info "Checking for copy of illumos-gate"
+	if [ ! -d $GATE_DIR ]; then
+		cd $CODE_DIR
+		git clone git://github.com/illumos/illumos-gate.git
+	fi
+	set +e
 }
 
 #
@@ -167,18 +167,19 @@ with ownership $LOGNAME:staff"
 # TODO add checksums
 get_closed_bins()
 {
-    set -e
-    echo "Checking for closed binaries"
-    if [ ! -d closed/root_i386 ]; then
-        [ ! -f on-closed-bins.i386.tar.bz2 ] && wget -c $CLOSED_BIN_URL
-        gtar $COMMON_TAR_OPTS -xjpf on-closed-bins.i386.tar.bz2
-    fi
+	set -e
+	echo "Checking for closed binaries"
+	if [ ! -d closed/root_i386 ]; then
+		[ ! -f on-closed-bins.i386.tar.bz2 ] && wget -c $CLOSED_BIN_URL
+		gtar $COMMON_TAR_OPTS -xjpf on-closed-bins.i386.tar.bz2
+	fi
 
-    if [ ! -d closed/root_i386-nd ]; then
-        [ ! -f on-closed-bins-nd.i386.tar.bz2 ] && wget -c $CLOSED_BIN_ND_URL
-        gtar $COMMON_TAR_OPTS -xjpf on-closed-bins-nd.i386.tar.bz2
-    fi
-    set +e
+	if [ ! -d closed/root_i386-nd ]; then
+		[ ! -f on-closed-bins-nd.i386.tar.bz2 ] \
+			&& wget -c $CLOSED_BIN_ND_URL
+		gtar $COMMON_TAR_OPTS -xjpf on-closed-bins-nd.i386.tar.bz2
+	fi
+	set +e
 }
 
 #
@@ -186,7 +187,7 @@ get_closed_bins()
 #
 info()
 {
-    echo "INFO: $1"
+	echo "INFO: $1"
 }
 
 #
@@ -245,15 +246,15 @@ pkg:/web/server/apache-22"
 
 install_pkgs()
 {
-    info "Installing required packages"
-    pkgs="$COMMON_PKGS"
-    case $OS_NAME in
-        OmniOS)
-            pkgs="$pkgs $OMNI_PKGS" ;;
-        OpenIndiana)
-            pkgs="$pkgs $OI_PKGS" ;;
-    esac
-    sudo pkg install -v $pkgs
+	info "Installing required packages"
+	pkgs="$COMMON_PKGS"
+	case $OS_NAME in
+	OmniOS)
+		pkgs="$pkgs $OMNI_PKGS" ;;
+	OpenIndiana)
+		pkgs="$pkgs $OI_PKGS" ;;
+	esac
+	sudo pkg install -v $pkgs
 }
 
 #
@@ -262,14 +263,14 @@ install_pkgs()
 #
 link_gnu_egrep()
 {
-    set -e
-    info "Checking /usr/bin/egrep"
-    if [ "$(readlink $(which egrep))" != "/usr/gnu/bin/egrep" ]; then
-        sudo mv /usr/bin/grep /usr/bin/grep-old
-        sudo ln -s /usr/gnu/bin/grep /usr/bin/grep
-        info "Linked /usr/bin/grep to /usr/gnu/bin/grep"
-    fi
-    set +e
+	set -e
+	info "Checking /usr/bin/egrep"
+	if [ "$(readlink $(which egrep))" != "/usr/gnu/bin/egrep" ]; then
+		sudo mv /usr/bin/grep /usr/bin/grep-old
+		sudo ln -s /usr/gnu/bin/grep /usr/bin/grep
+		info "Linked /usr/bin/grep to /usr/gnu/bin/grep"
+	fi
+	set +e
 }
 
 #
@@ -278,15 +279,16 @@ link_gnu_egrep()
 #
 link_studio()
 {
-    set -e
-    case $OS_NAME in
-        OmniOS)
-            if [ "$(readlink /opt/SUNWspro)" != "/opt/sunstudio12.1/" ]; then
-                info "Linking /opt/SUNWspro to /opt/sunstudio12.1"
-                sudo ln -s /opt/sunstudio12.1/ /opt/SUNWspro
-            fi
-    esac
-    set +e
+	set -e
+	case $OS_NAME in
+	OmniOS)
+		if [ "$(readlink /opt/SUNWspro)" \
+			     != "/opt/sunstudio12.1/" ]; then
+			info "Linking /opt/SUNWspro to /opt/sunstudio12.1"
+			sudo ln -s /opt/sunstudio12.1/ /opt/SUNWspro
+		fi
+	esac
+	set +e
 }
 
 #
@@ -294,7 +296,7 @@ link_studio()
 #
 print_instructions()
 {
-    printf "
+	printf "
 
 # ############################################################################
 # Summary
@@ -437,52 +439,57 @@ $ sudo reboot
 #
 setup_illumos_sh()
 {
-    set -e
-    info "Checking for illumos.sh"
-    if [ ! -f "illumos.sh" ]; then
-        cp usr/src/tools/env/illumos.sh .
-        info "Copied illumos.sh from usr/src/tools/env/illumos.sh"
+	set -e
+	info "Checking for illumos.sh"
+	if [ ! -f "illumos.sh" ]; then
+		cp usr/src/tools/env/illumos.sh .
+		info "Copied illumos.sh from usr/src/tools/env/illumos.sh"
 
-        sed -i -r \
-            -e "s:export GATE.*:export GATE=$GATE:" \
-            -e "s:export CODEMGR_WS.*:export CODEMGR_WS=$GATE_DIR:" \
-            -e 's:export SPRO_ROOT.*:export SPRO_ROOT=/opt:' \
-            -e 's:export SPRO_VROOT.*:export SPRO_VROOT=/opt/sunstudio12.1:' \
-            illumos.sh
+		sed -i -r \
+		    -e "s:export GATE.*:export GATE=$GATE:" \
+		    -e "s:export CODEMGR_WS.*:export CODEMGR_WS=$GATE_DIR:" \
+		    -e 's:export SPRO_ROOT.*:export SPRO_ROOT=/opt:' \
+		    -e 's:export SPRO_VROOT.*:export \
+SPRO_VROOT=/opt/sunstudio12.1:' \
+		    illumos.sh
 
-        # Use gcc for compilation
-        echo "export __GNUC=''" >> illumos.sh
-        echo "unset __SUNC" >> illumos.sh
-        echo "export CW_NO_SHADOW=1" >> illumos.sh
-        echo "export ONLY_LINT_DEFS=-I\${SPRO_ROOT}/sunstudio12.1/prod/include/lint" >> illumos.sh
+		# Use gcc for compilation
+		echo "export __GNUC=''" >> illumos.sh
+		echo "unset __SUNC" >> illumos.sh
+		echo "export CW_NO_SHADOW=1" >> illumos.sh
+		echo "export ONLY_LINT_DEFS=\
+-I\${SPRO_ROOT}/sunstudio12.1/prod/include/lint" >> illumos.sh
 
-        # Disable IPP & SMB printing so the build doesn't fail.
-        sed -i -r \
-            -e "s:(export ENABLE_IPP_PRINTING=.*):#\1:" \
-            -e "s:(export ENABLE_SMB_PRINTING=.*):#\1:" \
-            illumos.sh
+		# Disable IPP & SMB printing so the build doesn't fail.
+		sed -i -r \
+		    -e "s:(export ENABLE_IPP_PRINTING=.*):#\1:" \
+		    -e "s:(export ENABLE_SMB_PRINTING=.*):#\1:" \
+		    illumos.sh
 
-        case $OS_NAME in
-            OmniOS)
-                echo "Adding OmniOS specific customizations to illumos.sh"
-                echo "export GCC_ROOT=/opt/gcc-4.4.4/" >> illumos.sh
-                echo "export PERL_VERSION=5.16.1" >> illumos.sh
-                echo "export PERL_PKGVERS=-5161" >> illumos.sh
-                echo "export PERL_ARCH=i86pc-solaris-thread-multi-64int" >> illumos.sh
-                echo "export ONNV_BUILDNUM=$OS_VSN" >> illumos.sh
-                ;;
-            OpenIndiana)
-                echo "Adding OpenIndiana specific customizations to illumos.sh"
-                # Make sure branch number for nightly packages
-                # is greater than host system.
-                echo "export ONNV_BUILDNUM=152.0.0" >> illumos.sh
-                ;;
-        esac
+		case $OS_NAME in
+		OmniOS)
+			echo "Adding OmniOS specific customizations \
+to illumos.sh"
+			echo "export GCC_ROOT=/opt/gcc-4.4.4/" >> illumos.sh
+			echo "export PERL_VERSION=5.16.1" >> illumos.sh
+			echo "export PERL_PKGVERS=-5161" >> illumos.sh
+			echo "export \
+PERL_ARCH=i86pc-solaris-thread-multi-64int" >> illumos.sh
+			echo "export ONNV_BUILDNUM=$OS_VSN" >> illumos.sh
+			;;
+		OpenIndiana)
+			echo "Adding OpenIndiana specific customizations \
+to illumos.sh"
+			# Make sure branch number for nightly packages
+			# is greater than host system.
+			echo "export ONNV_BUILDNUM=152.0.0" >> illumos.sh
+			;;
+		esac
 
-        info "Configured illumos.sh"
-    fi
+		info "Configured illumos.sh"
+	fi
 
-    set +e
+	set +e
 }
 
 #
@@ -490,7 +497,7 @@ setup_illumos_sh()
 #
 usage()
 {
-    printf "Usage: ./nightly-setup.sh [-Vhp]
+	printf "Usage: ./nightly-setup.sh [-Vhp]
 
 -b, --brief
         Print brief build instructions.
@@ -512,8 +519,8 @@ usage()
 #
 version()
 {
-    echo $VERSION
-    exit 0
+	echo $VERSION
+	exit 0
 }
 
 # ############################################################################
@@ -521,23 +528,23 @@ version()
 # ############################################################################
 while getopts 'V(version)h(help)p(print)b(brief)' opt
 do
-    case $opt in
-        b)
-            brief
-            exit 0
-            ;;
-        h)
-            usage
-            exit 0
-            ;;
-        p)
-            print_instructions
-            exit 0
-            ;;
-        V)
-            version
-            ;;
-    esac
+	case $opt in
+	b)
+		brief
+		exit 0
+		;;
+	h)
+		usage
+		exit 0
+		;;
+	p)
+		print_instructions
+		exit 0
+		;;
+	V)
+		version
+		;;
+	esac
 done
 
 shift $((OPTIND -1))
