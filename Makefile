@@ -1,3 +1,8 @@
+DIST_FILE=rpz-misc.tar.gz
+#
+# Currently assuming OSX, fix this.
+#
+SHA256=sha256sum
 VSN_DATE=20150910
 VSN_HASH=$(shell git rev-parse HEAD)
 
@@ -16,5 +21,6 @@ dest/bin/nightly-setup: src/illumos/nightly-setup.sh dest/bin
 
 dist: all
 	@ln -s ./dest ./rpz-misc
-	@tar -cHzf dest/rpz-misc-$(VSN_DATE).tar.gz --exclude '*.gz' ./rpz-misc
+	@tar -cHzf dest/$(DIST_FILE) --exclude '*.gz' ./rpz-misc
 	@rm -f ./rpz-misc
+	@cd dest && $(SHA256) $(DIST_FILE) > $(DIST_FILE).sha256
