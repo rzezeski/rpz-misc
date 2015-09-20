@@ -30,7 +30,7 @@ CODE_DIR=/code
 COMMON_TAR_OPTS="--checkpoint=256 --checkpoint-action=dot"
 GATE=illumos-gate
 GATE_DIR="$CODE_DIR/$GATE"
-VERSION="2015-09-10 @VSN_HASH@"
+VERSION="@VSN_DATE@ @VSN_HASH@"
 
 # ############################################################################
 # Functions
