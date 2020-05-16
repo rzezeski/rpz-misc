@@ -1,0 +1,2039 @@
+#!/usr/bin/ksh
+. ./net-test-common.ksh
+
+set -u
+
+#
+# Verify that an untagged VNIC can be created and receive traffic.
+# Furthermore, if the underlying part providers hardware
+# classification, verify that hardware resources are provided and that
+# TCP traffic is hardware classified.
+#
+function test_mac_vnic_rx
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset send_vn1="mt_send1"
+	typeset recv_vn1="mt_recv1"
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+	typeset uclassify=$(get_classify_method $recv untagged)
+
+	#
+	# The first two groups are taken by default and primary.
+	#
+	if [[ $uclassify == hw ]]; then
+		verify_num_groups_gte $recv 3
+	fi
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic $send $send_vn1
+	create_vnic $recv $recv_vn1
+	create_addr $send_vn1 $send_ip1
+	create_addr $recv_vn1 $recv_ip1
+
+	send_traffic -c $uclassify $send_ip $recv_ip $recv
+	send_traffic -c $uclassify $send_ip1 $recv_ip1 $recv_vn1
+
+	delete_addr $send
+	delete_addr $recv
+	delete_interface $send_vn1
+	delete_interface $recv_vn1
+	delete_vnic $send_vn1
+	delete_vnic $recv_vn1
+	pass
+}
+
+#
+# Verify that a tagged VNIC can be created and receive traffic.
+# Furthermore, if the underlying part providers hardware
+# classification, verify that hardware resources are provided and
+# that TCP traffic is hardware classified.
+#
+function test_mac_vlan_rx
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset send_vn1=mt_send1
+	typeset recv_vn1=mt_recv1
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+	typeset uclassify=$(get_classify_method $recv untagged)
+	typeset vclassify=$(get_classify_method $recv vlan)
+
+	#
+	# The first two groups are taken by default and primary.
+	#
+	if [[ $uclassify == hw || $vclassify == hw ]]; then
+		verify_num_groups_gte $recv 3
+	fi
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic -v 5 $send $send_vn1
+	create_vnic -v 5 $recv $recv_vn1
+	create_addr $send_vn1 $send_ip1
+	create_addr $recv_vn1 $recv_ip1
+
+	send_traffic  -c $uclassify $send_ip $recv_ip $recv
+	send_traffic -c $vclassify $send_ip1 $recv_ip1 $recv_vn1
+
+	delete_addr $send
+	delete_addr $recv
+	delete_interface $send_vn1
+	delete_interface $recv_vn1
+	delete_vnic $send_vn1
+	delete_vnic $recv_vn1
+	pass
+}
+
+#
+# Verify correct migration of a VNIC from software to hardware Rx
+# rings on any link that supports 3 or more mac groups.
+#
+function test_mac_sw_to_hw
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset recv_ip=${IPS[1]}
+	typeset recv_ip1=${IPS[2]}
+	typeset recv_vn1=mt_recv1
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+
+	if ! has_group_support $recv; then
+		skip "$recv does not support groups"
+		return
+	fi
+
+	verify_num_groups_gte $recv 3
+
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic -s $recv $recv_vn1
+	create_addr $recv_vn1 $recv_ip1
+
+	send_traffic -c hw $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip $recv_ip1 $recv_vn1
+
+	if ! dladm set-linkprop -p rxrings=hw $recv_vn1; then
+		fail "failed to set rxrings=hw for $recv_vn1"
+	fi
+
+	send_traffic -c hw $send_ip $recv_ip $recv
+	send_traffic -c hw $send_ip $recv_ip1 $recv_vn1
+
+	delete_addr $recv
+	delete_addr $send
+	delete_interface $recv_vn1
+	delete_vnic $recv_vn1
+
+	pass
+}
+
+#
+# Verify that `recv` enters promisc mode upon running out of unicast
+# filters and that traffic flows correctly under this condition.
+#
+function test_mac_promisc
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset recv_ip=${IPS[1]}
+	typeset recv_ip1=${IPS[2]}
+	typeset recv_ip_last=${IPS[3]}
+	typeset recv_vn1="mt_recv1"
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+
+	typeset uclassify=$(get_classify_method $recv untagged)
+	#
+	# The first two groups are taken by default and primary.
+	#
+	if [[ $uclassify == hw ]]; then
+		verify_num_groups_gte $recv 3
+	fi
+
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+
+	#
+	# We have to query the number of available filters AFTER the
+	# recv_ip is created, as it consumes a filter.
+	#
+	integer num_l2_filt=$(get_num_l2_filt $recv)
+	integer num_last=$(($num_l2_filt + 1))
+	typeset recv_vn_last="mt_recv${num_last}"
+
+	#
+	# Create enough VNICs to consume all hardware L2 unicast filters.
+	#
+	for i in {1..$num_l2_filt}; do
+		create_vnic $recv "mt_recv${i}"
+	done
+
+	#
+	# Promisc shouldn't be on yet. We've consumed all filters but
+	# it's not until the next client that we should need promisc mode.
+	#
+	if is_promisc $recv; then
+		fail "$recv is unexpectedly in promisc mode"
+	fi
+
+	#
+	# Okay, this VNIC should send us over the edge. We are out of
+	# hardware filters; thus the only way to receive traffic for
+	# this VNIC is by entering promisc mode.
+	#
+	create_vnic $recv $recv_vn_last
+	if ! is_promisc $recv; then
+		fail "$recv is not promisc mode"
+	fi
+
+	create_addr $recv_vn1 $recv_ip1
+	create_addr $recv_vn_last $recv_ip_last
+
+	send_traffic -c $uclassify $send_ip $recv_ip $recv
+	send_traffic -c $uclassify $send_ip $recv_ip1 $recv_vn1
+	send_traffic -c sw $send_ip $recv_ip_last $recv_vn_last
+
+	delete_interface $recv_vn_last
+	delete_interface $recv_vn1
+	delete_addr $send
+	delete_addr $recv
+	for i in {1..$num_last}; do
+		delete_vnic "mt_recv${i}"
+	done
+	pass
+}
+
+#
+# This is the same as the last test, but uses tagged VNICs. The number
+# of distinct VLANs should have no impact on promisc mode at this time
+# in mac's implementation. If the hardware supports VLAN filtering,
+# then we assume it has a bitmap to represent each possible VLAN.
+# Otherwise, we assume it passes all VLANs. In that sense, this test
+# is a bit redundant, but it acts as a good catch in the event that
+# this detail of mac changes in the future.
+#
+function test_mac_promisc_vlan
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset send_ip_last=${IPS[2]}
+	typeset recv_ip=${IPS[3]}
+	typeset recv_ip1=${IPS[4]}
+	typeset recv_ip_last=${IPS[5]}
+	typeset send_vn1="mt_send1"
+	typeset recv_vn1="mt_recv1"
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+
+	typeset uclassify=$(get_classify_method $recv untagged)
+	typeset vclassify=$(get_classify_method $recv vlan)
+	#
+	# The first two groups are taken by default and primary.
+	#
+	if [[ $uclassify == hw || $vclassify == hw ]]; then
+		verify_num_groups_gte $recv 3
+	fi
+
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+
+	#
+	# We have to query the number of available filters AFTER the
+	# recv_ip is created, as it consumes a filter.
+	#
+	integer num_l2_filt=$(get_num_l2_filt $recv)
+	integer num_last=$(($num_l2_filt + 1))
+	typeset send_vn_last="mt_send${num_last}"
+	typeset recv_vn_last="mt_recv${num_last}"
+
+	#
+	# Create enough VNICs to consume all hardware L2 unicast filters.
+	#
+	for i in {1..$num_l2_filt}; do
+		#
+		# We can't use VID 1 because that's the default tag.
+		#
+		create_vnic -v $(($i + 1)) $recv "mt_recv${i}"
+	done
+
+	#
+	# Promisc shouldn't be on yet. We've consumed all filters but
+	# it's not until the next client that we should need promisc mode.
+	#
+	if is_promisc $recv; then
+		fail "$recv is unexpectedly in promisc mode"
+	fi
+
+	#
+	# Okay, this VNIC should send us over the edge. We are out of
+	# hardware filters; thus the only way to receive traffic for
+	# this VNIC is by entering promisc mode.
+	#
+	create_vnic -v $(($num_last + 1)) $recv $recv_vn_last
+	if ! is_promisc $recv; then
+		fail "$recv is not promisc mode"
+	fi
+
+	create_vnic -v 2 $send $send_vn1
+	create_vnic -v $(($num_last + 1)) $send $send_vn_last
+	create_addr $send_vn1 $send_ip1
+	create_addr $send_vn_last $send_ip_last
+	create_addr $recv_vn1 $recv_ip1
+	create_addr $recv_vn_last $recv_ip_last
+
+	send_traffic -c $uclassify $send_ip $recv_ip $recv
+	send_traffic -c $vclassify $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c sw $send_ip_last $recv_ip_last $recv_vn_last
+
+	delete_interface $send_vn1
+	delete_vnic $send_vn1
+	delete_interface $send_vn_last
+	delete_vnic $send_vn_last
+	delete_interface $recv_vn_last
+	delete_interface $recv_vn1
+	delete_addr $send
+	delete_addr $recv
+	for i in {1..$num_last}; do
+		delete_vnic "mt_recv${i}"
+	done
+	pass
+}
+
+function test_mac_all_groups
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset recv_ip_n=${IPS[4]}
+	typeset recv_ip_np1=${IPS[5]}
+	typeset send_vn1=mt_send1
+	typeset recv_vn1=mt_recv1
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+
+	if ! has_group_support $recv; then
+		skip "$recv does not support groups"
+		return
+	fi
+
+	verify_num_groups_gte $recv 3
+
+	typeset uclassify=$(get_classify_method $recv untagged)
+	integer num=$(($(get_num_groups $recv) - 2))
+	typeset recv_vn_n="mt_recv$num"
+	typeset recv_vn_np1="mt_recv$(($num + 1))"
+	for i in {1..$num}; do
+		typeset vn="mt_recv${i}"
+		create_vnic $recv $vn
+		verify_hw_group $recv $vn
+	done
+
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_addr $recv_vn1 $recv_ip1
+	create_addr $recv_vn_n $recv_ip_n
+	create_vnic $recv $recv_vn_np1
+	create_addr $recv_vn_np1 $recv_ip_np1
+	verify_sw_group $recv $recv_vn_np1
+	create_vnic $send $send_vn1
+	create_addr $send_vn1 $send_ip1
+
+	send_traffic -c $uclassify $send_ip $recv_ip $recv
+	send_traffic -c $uclassify $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c $uclassify $send_ip1 $recv_ip_n $recv_vn_n
+	send_traffic -c sw $send_ip1 $recv_ip_np1 $recv_vn_np1
+
+	delete_interface $send_vn1
+	delete_vnic $send_vn1
+	delete_interface $recv_vn1
+	delete_interface $recv_vn_n
+	delete_interface $recv_vn_np1
+	delete_vnic $recv_vn_np1
+	delete_addr $recv
+	delete_addr $send
+	for i in {1..$num}; do
+		delete_vnic "mt_recv${i}"
+	done
+
+	pass
+}
+
+#
+# This test requires a NIC with at least 3 mac groups.
+#
+#	0) The default group.
+#	1) The primary group.
+#	2) The mt_recv1 group.
+#
+# Create N tagged VNICs, where N is the number of mac groups minus 2
+# (to account for default and primary). Verify that the first N groups
+# use reserved groups (hardware classification). Then verify that the
+# primary and Nth group have their traffic hardware classified, and
+# that the N+1 group gets software classification.
+#
+# N.B. If a NIC is capable of hosting more than 1024 mac groups, then
+# this test may start giving you problems as the mac framework may
+# create up to 24 threads per VNIC just for SRS fanout. This will
+# cause you to start bumping up against thread space limitations. If
+# this is the case the best course of action is to modify the drivers
+# conf file to limit yourself to a smaller number of Rx groups.
+#
+function test_mac_vlan_all_groups
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset recv_ip_n=${IPS[4]}
+	typeset recv_ip_np1=${IPS[5]}
+	typeset send_vn1=mt_send1
+	typeset recv_vn1=mt_recv1
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+
+	if ! has_group_support $recv; then
+		skip "$recv does not support groups"
+		return
+	fi
+
+	verify_num_groups_gte $recv 3
+
+	typeset uclassify=$(get_classify_method $recv untagged)
+	typeset vclassify=$(get_classify_method $recv vlan)
+	integer num=$(($(get_num_groups $recv) - 2))
+	typeset recv_vn_n="mt_recv$num"
+	typeset recv_vn_np1="mt_recv$(($num + 1))"
+	for i in {1..$num}; do
+		typeset vn="mt_recv${i}"
+		create_vnic -v $VID $recv $vn
+		verify_hw_group $recv $vn
+	done
+
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_addr $recv_vn1 $recv_ip1
+	create_addr $recv_vn_n $recv_ip_n
+	create_vnic -v $VID $recv $recv_vn_np1
+	create_addr $recv_vn_np1 $recv_ip_np1
+	verify_sw_group $recv $recv_vn_np1
+	create_vnic -v $VID $send $send_vn1
+	create_addr $send_vn1 $send_ip1
+
+	send_traffic -c $uclassify $send_ip $recv_ip $recv
+	send_traffic -c $vclassify $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c $vclassify $send_ip1 $recv_ip_n $recv_vn_n
+	send_traffic -c sw $send_ip1 $recv_ip_np1 $recv_vn_np1
+
+	delete_interface $send_vn1
+	delete_vnic $send_vn1
+	delete_interface $recv_vn1
+	delete_interface $recv_vn_n
+	delete_interface $recv_vn_np1
+	delete_vnic $recv_vn_np1
+	delete_addr $recv
+	delete_addr $send
+	for i in {1..$num}; do
+		delete_vnic "mt_recv${i}"
+	done
+
+	pass
+}
+
+function test_mac_steal_group
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset recv_ip_np1=${IPS[4]}
+	typeset recv_ip_np2=${IPS[5]}
+	typeset send_vn1=mt_send1
+	typeset recv_vn1=mt_recv1
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+	if ! has_group_support $recv; then
+		skip "$recv does not support groups"
+		return
+	fi
+	verify_num_groups_gte $recv 3
+	typeset uclassify=$(get_classify_method $recv untagged)
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+
+	integer num=$(($(get_num_groups $recv) - 2))
+	typeset recv_vn_np1="mt_recv$(($num + 1))"
+	typeset recv_vn_np2="mt_recv$(($num + 2))"
+	for i in {1..$num}; do
+		typeset vn="mt_recv${i}"
+		create_vnic $recv $vn
+		verify_hw_group $recv $vn
+	done
+
+	create_vnic $send $send_vn1
+	create_addr $send_vn1 $send_ip1
+	create_addr $recv_vn1 $recv_ip1
+
+	send_traffic -c $uclassify $send_ip $recv_ip $recv
+	send_traffic -c $uclassify $send_ip1 $recv_ip1 $recv_vn1
+
+	#
+	# Create a new VNIC which explicitly requests HW Rx rings.
+	# Since all reserved groups are taken at this point it shoud
+	# steal the group from the first client which didn't eplicitly
+	# request HW Rx rings: the primary client.
+	#
+	create_vnic -h $recv $recv_vn_np1
+	verify_hw_group $recv $recv_vn_np1
+	verify_sw_group $recv $recv
+	create_addr $recv_vn_np1 $recv_ip_np1
+
+	send_traffic -c sw $send_ip $recv_ip $recv
+	send_traffic -c $uclassify $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c $uclassify $send_ip1 $recv_ip_np1 $recv_vn_np1
+
+	#
+	# Create another VNIC requesting HW Rx rings. This should
+	# steal another group, this time from recv_vn1.
+	#
+	create_vnic -h $recv $recv_vn_np2
+	verify_hw_group $recv $recv_vn_np2
+	verify_sw_group $recv $recv_vn1
+	create_addr $recv_vn_np2 $recv_ip_np2
+
+	send_traffic -c sw $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c $uclassify $send_ip1 $recv_ip_np1 $recv_vn_np1
+	send_traffic -c $uclassify $send_ip1 $recv_ip_np2 $recv_vn_np2
+
+	delete_addr $send
+	delete_addr $recv
+	delete_interface $send_vn1
+	delete_vnic $send_vn1
+	delete_interface $recv_vn1
+	delete_interface $recv_vn_np1
+	delete_vnic $recv_vn_np1
+	delete_interface $recv_vn_np2
+	delete_vnic $recv_vn_np2
+	for i in {1..$num}; do
+		delete_vnic mt_recv${i}
+	done
+
+	pass
+}
+
+#
+# Create enough tagged VNICs to take all the reserved groups. Then
+# create a tagged VNIC with rxrings=hw to induce the group stealing
+# logic. Verify that this new cilent steals a group. Then verify that
+# traffic is received on hwlane for the new client, and swlane for the
+# client that had its group stolen.
+#
+function test_mac_vlan_steal_group
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset recv_ip_np1=${IPS[4]}
+	typeset recv_ip_np2=${IPS[5]}
+	typeset send_vn1=mt_send1
+	typeset recv_vn1=mt_recv1
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+	if ! has_group_support $recv; then
+		skip "$recv does not support groups"
+		return
+	fi
+	verify_num_groups_gte $recv 3
+	typeset uclassify=$(get_classify_method $recv untagged)
+	typeset vclassify=$(get_classify_method $recv vlan)
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+
+	integer num=$(($(get_num_groups $recv) - 2))
+	typeset recv_vn_np1="mt_recv$(($num + 1))"
+	typeset recv_vn_np2="mt_recv$(($num + 2))"
+	for i in {1..$num}; do
+		typeset vn="mt_recv${i}"
+		create_vnic -v $VID $recv $vn
+		verify_hw_group $recv $vn
+	done
+
+	create_vnic -v $VID $send $send_vn1
+	create_addr $send_vn1 $send_ip1
+	create_addr $recv_vn1 $recv_ip1
+
+	send_traffic -c $uclassify $send_ip $recv_ip $recv
+	send_traffic -c $vclassify $send_ip1 $recv_ip1 $recv_vn1
+
+	#
+	# Create a new tagged VNIC which explicitly requests HW Rx
+	# rings. Since all reserved groups are taken at this point it
+	# shoud steal the group from the first client which didn't
+	# eplicitly request HW Rx rings: the primary client.
+	#
+	create_vnic -v $VID -h $recv $recv_vn_np1
+	verify_hw_group $recv $recv_vn_np1
+	verify_sw_group $recv $recv
+	create_addr $recv_vn_np1 $recv_ip_np1
+
+	send_traffic -c sw $send_ip $recv_ip $recv
+	send_traffic -c $vclassify $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c $vclassify $send_ip1 $recv_ip_np1 $recv_vn_np1
+
+	#
+	# Create another tagged VNIC requesting HW Rx rings. This
+	# should steal another group, this time from recv_vn1.
+	#
+	create_vnic -v $VID -h $recv $recv_vn_np2
+	verify_hw_group $recv $recv_vn_np2
+	verify_sw_group $recv $recv_vn1
+	create_addr $recv_vn_np2 $recv_ip_np2
+
+	send_traffic -c sw $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c $vclassify $send_ip1 $recv_ip_np1 $recv_vn_np1
+	send_traffic -c $vclassify $send_ip1 $recv_ip_np2 $recv_vn_np2
+
+	delete_addr $send
+	delete_addr $recv
+	delete_interface $send_vn1
+	delete_vnic $send_vn1
+	delete_interface $recv_vn1
+	delete_interface $recv_vn_np1
+	delete_vnic $recv_vn_np1
+	delete_interface $recv_vn_np2
+	delete_vnic $recv_vn_np2
+	for i in {1..$num}; do
+		delete_vnic mt_recv${i}
+	done
+
+	pass
+}
+
+#
+# Verify that two tagged VNICs sharing the same MAC address are SW
+# classified and that they are placed on the default group. This only
+# applies to drivers that have group support + hardware VLAN steering.
+#
+# TODO: Move this function and other group-only functions to a
+# groups-tests script?
+#
+function test_mac_groups_vlan_shared_addr
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset send_ip2=${IPS[2]}
+	typeset recv_ip=${IPS[3]}
+	typeset recv_ip1=${IPS[4]}
+	typeset recv_ip2=${IPS[5]}
+	typeset send_vn1=mt_send1
+	typeset send_vn2=mt_send2
+	typeset recv_vn1=mt_recv1
+	typeset recv_vn2=mt_recv2
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+	if ! has_group_support $recv; then
+		skip "$recv does not support groups"
+		return
+	fi
+	verify_num_groups_gte $recv 2
+	typeset uclassify=$(get_classify_method $recv untagged)
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic -v 5 $send $send_vn1
+	create_vnic -v 6 $send $send_vn2
+	create_vnic -v 5 $recv $recv_vn1
+	typeset recv_vn1_addr=$(get_macaddr $recv_vn1)
+	create_vnic -m $recv_vn1_addr -v 6 $recv $recv_vn2
+	typeset recv_vn2_addr=$(get_macaddr $recv_vn2)
+
+	if [[ "$recv_vn1_addr" != "$recv_vn2_addr" ]]; then
+		fail "VNICs $recv_vn1 and $recv_vn2 don't have the same" \
+		     " MAC address: $recv_vn1_addr != $recv_vn2_addr"
+	fi
+
+	verify_sw_lanes $recv_vn1
+	verify_sw_lanes $recv_vn2
+
+	create_addr $send_vn1 $send_ip1
+	create_addr $send_vn2 $send_ip2
+	create_addr $recv_vn1 $recv_ip1
+	create_addr $recv_vn2 $recv_ip2
+
+	send_traffic -c $uclassify $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c sw $send_ip2 $recv_ip2 $recv_vn2
+
+	delete_addr $send
+	delete_addr $recv
+	delete_interface $send_vn1
+	delete_interface $send_vn2
+	delete_interface $recv_vn1
+	delete_interface $recv_vn2
+	delete_vnic $send_vn1
+	delete_vnic $send_vn2
+	delete_vnic $recv_vn1
+	delete_vnic $recv_vn2
+	pass
+}
+
+#
+# Same as the last tests but doesn't rely on groups. This makes sure
+# that all types of links (and really mac) can handle a mac address
+# used across VLANs.
+#
+function test_mac_vlan_shared_addr
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset send_ip2=${IPS[2]}
+	typeset recv_ip=${IPS[3]}
+	typeset recv_ip1=${IPS[4]}
+	typeset recv_ip2=${IPS[5]}
+	typeset send_vn1=mt_send1
+	typeset send_vn2=mt_send2
+	typeset recv_vn1=mt_recv1
+	typeset recv_vn2=mt_recv2
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+	if has_group_support $recv; then
+		verify_num_groups_gte $recv 2
+	fi
+	typeset uclassify=$(get_classify_method $recv untagged)
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic -v 5 $send $send_vn1
+	create_vnic -v 6 $send $send_vn2
+	create_vnic -v 5 $recv $recv_vn1
+	typeset recv_vn1_addr=$(get_macaddr $recv_vn1)
+	create_vnic -m $recv_vn1_addr -v 6 $recv $recv_vn2
+	typeset recv_vn2_addr=$(get_macaddr $recv_vn2)
+
+	if [[ "$recv_vn1_addr" != "$recv_vn2_addr" ]]; then
+		fail "VNICs $recv_vn1 and $recv_vn2 don't have the same" \
+		     " MAC address: $recv_vn1_addr != $recv_vn2_addr"
+	fi
+
+	verify_sw_lanes $recv_vn1
+	verify_sw_lanes $recv_vn2
+
+	create_addr $send_vn1 $send_ip1
+	create_addr $send_vn2 $send_ip2
+	create_addr $recv_vn1 $recv_ip1
+	create_addr $recv_vn2 $recv_ip2
+
+	send_traffic -c $uclassify $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c sw $send_ip2 $recv_ip2 $recv_vn2
+
+	delete_addr $send
+	delete_addr $recv
+	delete_interface $send_vn1
+	delete_interface $send_vn2
+	delete_interface $recv_vn1
+	delete_interface $recv_vn2
+	delete_vnic $send_vn1
+	delete_vnic $send_vn2
+	delete_vnic $recv_vn1
+	delete_vnic $recv_vn2
+	pass
+}
+
+#
+# Place two tagged VNICs sharing a VID on the default group via
+# rxrings=sw. Verify traffic is seen on both. Then delete one and
+# verify traffic is still seen on remaining tagged VNIC.
+#
+function test_mac_two_vlans_on_default
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset recv_ip2=${IPS[4]}
+	typeset send_vn1=mt_send1
+	typeset recv_vn1=mt_recv1
+	typeset recv_vn2=mt_recv2
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+	if ! has_group_support $recv; then
+		skip "$recv does not support groups"
+		return
+	fi
+	verify_num_groups_gte $recv 2
+	typeset uclassify=$(get_classify_method $recv untagged)
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic -v $VID $send $send_vn1
+	create_addr $send_vn1 $send_ip1
+	create_vnic -v $VID -s $recv $recv_vn1
+	create_vnic -v $VID -s $recv $recv_vn2
+	verify_sw_group $recv $recv_vn1
+	verify_sw_group $recv $recv_vn2
+	create_addr $recv_vn1 $recv_ip1
+	create_addr $recv_vn2 $recv_ip2
+
+	send_traffic -c $uclassify $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c sw $send_ip1 $recv_ip2 $recv_vn2
+
+	delete_interface $recv_vn2
+	delete_vnic $recv_vn2
+
+	send_traffic -c $uclassify $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip1 $recv_ip1 $recv_vn1
+
+	delete_addr $send
+	delete_addr $recv
+	delete_interface $send_vn1
+	delete_vnic $send_vn1
+	delete_interface $recv_vn1
+	delete_vnic $recv_vn1
+
+	pass
+}
+
+# ============================================================
+# ixgbe tests
+# ============================================================
+
+#
+# TODO: Initially I wrote this test to create 4095 VLANs, but it turns
+# out SRS fanout causes an explosion of soft ring workers threads and
+# exhausts the thread space. That will be the subject of a future bug.
+# For now we test something a bit more reasonable but also probably
+# much bigger than anyuthing anyone is running in production.
+#
+# Verify that 1024 VLANs can coexist and receive traffic on ixgbe. We
+# start with VID 2 because 1 is reserved by the default_tag.
+#
+function test_mac_ixgbe_many_vlans
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip2=${IPS[1]}
+	typeset send_ip1025=${IPS[2]}
+	typeset recv_ip=${IPS[3]}
+	typeset recv_ip2=${IPS[4]}
+	typeset recv_ip1025=${IPS[5]}
+	typeset send_vn2="mt_send2"
+	typeset send_vn1025="mt_send1025"
+	typeset recv_vn2="mt_recv2"
+	typeset recv_vn1025="mt_recv1025"
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+	verify_nic_type $recv ixgbe
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+
+	#
+	# Create 4095 VNICs, each on a unique VLAN. We don't create
+	# VID 1 because it's reserved as the default_tag.
+	#
+	for vid in {2..1025}; do
+		create_vnic -v $vid $recv "mt_recv${vid}"
+	done
+
+	create_vnic -v 2 $send $send_vn2
+	create_addr $send_vn2 $send_ip2
+	create_vnic -v 1025 $send $send_vn1025
+	create_addr $send_vn1025 $send_ip1025
+	create_addr $recv_vn2 $recv_ip2
+	create_addr $recv_vn1025 $recv_ip1025
+
+	send_traffic -c hw $send_ip $recv_ip $recv
+	send_traffic -c hw $send_ip2 $recv_ip2 $recv_vn2
+	send_traffic -c sw $send_ip1025 $recv_ip1025 $recv_vn1025
+
+	delete_interface $send_vn1025
+	delete_interface $send_vn2
+	delete_interface $recv_vn1025
+	delete_interface $recv_vn2
+	delete_vnic $send_vn1025
+	delete_vnic $send_vn2
+	delete_addr $send
+	delete_addr $recv
+	for vid in {2..1025}; do
+		delete_vnic "mt_recv${vid}"
+	done
+
+	pass
+}
+
+#
+# VFTA: VLAN Filter Table Array. Used in the L2 filtering stage. A
+# bitmap of VIDs to pass to the host. If a VID is missing from this
+# table then it is dropped by the controller.
+#
+# VLVF: VLAN Pool Filter. Used in the swtiching stage. A bitmap of
+# pools which are participating in the VID specified in this filter.
+# There are 64 of these filters. If you have 64 Rx groups each in
+# their own VLAN then you will need all 64 VLVF slots -- where each
+# one will indicate the VID and set one bit for its corresponding
+# pool.
+#
+# This test is designed to induce a state where ixgbe disables the VID
+# entry in the VFTA because the controller doesn't reference count the
+# number of clients sharing the same VID in the default group. For
+# example, if you had two mac clients on the default group, both a
+# member of VLAN 7, and no other clients interested in VLAN 7, then
+# removing one of those clients and calling ixgbe_set_vfta() to
+# disable the VID would cause its removal from the VFTA, causing the
+# traffic for the remaining client to be dropped at the filtering
+# stage. Instead, we have code in the driver to reference count the
+# VID usage on the default group and make sure the VFTA entry is
+# cleared only on removal of the final client.
+#
+# Requirements:
+#
+#	o We have two ixgbe ports.
+#
+#	o The recv port is configured with 32 Rx groups.
+#
+#	o The recv port has one Rx group already consumed by the
+#	  primary client
+#
+# 1. Create 30 tagged VNICs with the same vid. These MAC clients will
+#    consume all the RESERVED groups and utilize a single VLVF slot.
+#
+# 2. Create 2 more tagged VNICs with the same vid as the first 31.
+#    These two clients will end up on the default (SHARED) group. When
+#    calling ixgbe_set_vfta() we will set vlvf_bypass to true but
+#    since this VID exists in the VLVF we'll toggle the default
+#    group's bit in VLVFB[vid].
+#
+# 3. Verify TCP traffic can pass thru the last VNIC created.
+#
+# 4. Delete the first 30 VNICs. This will relinquish all the RESERVED
+#    groups and delete their indexes from the VLVFB[vid] slot. At this
+#    point only the default group's bit is set.
+#
+# 5. Reverify TCP traffic can pass thru the last VNIC created.
+#
+# 6. Delete the second to last VNIC (on the default group). This will
+#    disable the default group's bit in VLVFB[vid] even though the
+#    last VNIC is still interested in that VLAN. However, the
+#    switching logic doesn't depend on this because the default pool
+#    is enabled. And the logic in ixgbe_remvlan() will prevent us from
+#    clearing the VFTA bit while there is still a client for the VID.
+#
+# 7. Reverify TCP traffic can pass thru the last VNIC created.
+#
+function test_mac_ixgbe_vfta_repeated_vid
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset send_vn1=mt_send1
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+	typeset send_type=$(get_nic_type $send)
+	typeset recv_type=$(get_nic_type $recv)
+	if [ "$send_type" != "ixgbe" ] || [ "$recv_type" != "ixgbe" ]; then
+		skip "both nics must be ixgbe"
+		return
+	fi
+
+	#
+	# TODO: Rewrite this to be generic re the number of groups.
+	#
+	verify_num_groups $recv 32
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+
+	for i in {1..30}; do
+		create_vnic -v $VID $recv mt_recv${i}
+	done
+
+	dladm show-phys -po ringtype,clients -H $recv | \
+		grep -v TX | grep '\-\-'
+	if [[ $? -eq 0 ]]; then
+		fail "all Rx groups should be reserved on $recv"
+	fi
+
+	create_vnic -v $VID $send $send_vn1
+	create_addr $send_vn1 $send_ip1
+	create_vnic -v $VID $recv mt_recv31
+	create_vnic -v $VID $recv mt_recv32
+	create_addr mt_recv32 $recv_ip1
+
+	send_traffic -c hw $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip1 $recv_ip1 mt_recv32
+
+	for i in {1..30}; do
+		delete_vnic mt_recv${i}
+	done
+
+	send_traffic -c hw $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip1 $recv_ip1 mt_recv32
+
+	delete_vnic mt_recv31
+
+	send_traffic -c hw $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip1 $recv_ip1 mt_recv32
+
+	delete_addr $send
+	delete_addr $recv
+	delete_interface mt_recv32
+	delete_vnic mt_recv32
+	delete_interface $send_vn1
+	delete_vnic $send_vn1
+
+	pass
+}
+
+#
+# This is another edge case test related to test_vfta_repeated_vid.
+# There are cases where a client on a non-default group could share a
+# VLAN with a client on the default group, but the default group
+# doesn't have its bit enabled in the VLVFB for that VLAN. Then, if
+# the client on the non-default group is deleted, it will clear the
+# VFTA bit and the client on the default group will stop receiving
+# traffic. We have code in the driver to catch this case and re-enable
+# the VFTA bit so that traffic will continue to flow for the remaning
+# client. This test verifies that code works.
+#
+# 1. Create tagged VNIC 1 with property rxrings=sw. This will place it
+#    on the default Rx group.
+#
+# 2. Create tagged VNIC 2 with the same VID but don't set the
+#    property. This client will be placed on a non-default Rx group.
+#
+# 3. Verify traffic can flow over VNIC 1.
+#
+# 4. Delete VNIC 2.
+#
+# 5. Verify traffic can flow over VNIC 1.
+#
+function test_mac_ixgbe_vlvfb_missing_default
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset send_vn1=mt_send1
+	typeset recv_vn1=mt_recv1
+	typeset recv_vn2=mt_recv2
+
+	TNAME="$0<$recv>"
+
+	verify_nic $send
+	verify_nic $recv
+	typeset send_type=$(get_nic_type $send)
+	typeset recv_type=$(get_nic_type $recv)
+	if [ "$send_type" != "ixgbe" ] || [ "$recv_type" != "ixgbe" ]; then
+		skip "both nics must be ixgbe"
+		return
+	fi
+
+	#
+	# TODO: Fix this to be generic re number of mac groups.
+	#
+	verify_num_groups $recv 32
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic -v $VID $send $send_vn1
+	create_vnic -v $VID -s $recv $recv_vn1
+	verify_sw_group $recv $recv_vn1
+	create_vnic -v $VID $recv $recv_vn2
+	verify_hw_group $recv $recv_vn2
+	create_addr $send_vn1 $send_ip1
+	create_addr $recv_vn1 $recv_ip1
+
+	send_traffic -c hw $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip1 $recv_ip1 $recv_vn1
+
+	delete_vnic $recv_vn2
+
+	send_traffic -c hw $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip1 $recv_ip1 $recv_vn1
+
+	delete_addr $send
+	delete_addr $recv
+	delete_interface $send_vn1
+	delete_vnic $send_vn1
+	delete_interface $recv_vn1
+	delete_vnic $recv_vn1
+
+	pass
+}
+
+# ============================================================
+# aggr tests
+# ============================================================
+
+#
+# Verify that Rx data travels over the hardware SRS lanes when using
+# just the aggr's primary MAC client. Even on parts that only support
+# one group we should expect hardware SRS because we only have one
+# client.
+#
+function test_mac_aggr_primary
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset recv_ip=${IPS[1]}
+
+	TNAME="$0<$recv>"
+
+	typeset rport1=$(get_aggr_port $recv)
+	typeset classify=hw
+	typeset num_groups=$(get_num_groups $rport1)
+	#
+	# If the aggr port only has one group, then we hw classify. If
+	# it has more than one, we sw classify. This makes _no sense_,
+	# but appears to be related to issue #2 below as well as the
+	# following smartos issue.
+	#
+	# https://github.com/joyent/illumos-joyent/issues/179
+	#
+	if (($num_groups > 1)); then
+		typeset classify=sw
+	fi
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+
+	#
+	# This should expect hardware classification (hwlane) post
+	# aggr mac groups (SmartOS OS-6719), however:
+	#
+	# 1. This fails on 9000 MTU because the port SDU change causes
+	#    us to enter SW classify (verified on SmartOS only, not
+	#    sure if this holds for other distros).
+	#
+	# 2. This fails without MTU change because the primary client
+	#    ends up on the default group. This should be fixed in a
+	#    follow up.
+	#
+	# I believe #2 is the same (or related) to this SmartOS bug:
+	#
+	# https://github.com/joyent/illumos-joyent/issues/179
+	#
+	# if (($PRE_AGGR_MAC_GROUP == 0)); then
+	#    typeset uclassify=sw
+	# fi
+	send_traffic -c $classify $send_ip $recv_ip $recv
+
+	#
+	# TODO: Come back to debug this. Uncomment the fail statement
+	# and then use mdb to inspect the mac groups. Notice on ixgbe
+	# that it thinks there is a client on the 2nd group (reserved
+	# group) but that kstats actually show traffic ariving from
+	# the default group (1st group, index zero).
+	#
+	# fail "check setup"
+	delete_interface $send
+	delete_interface $recv
+
+	pass
+}
+
+#
+# Verify that Rx data travels over software lanes when using a VLAN on
+# the primary MAC addr. I.e., created with create-vlan.
+#
+function test_mac_aggr_primary_vlan
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset send_vn1=mt_send1
+	typeset recv_vn1=mt_recv1
+
+	TNAME="$0<$recv>"
+
+	verify_aggr $send
+	verify_aggr $recv
+	typeset rport1=$(get_aggr_port $recv)
+	typeset classify=sw
+	typeset num_groups=$(get_num_groups $rport1)
+	#
+	# This is different from the previous test. We now have two
+	# clients. So regardless of the number of groups we will
+	# require sw classification. But for parts with more than 1
+	# group the primary really show get hw classification.
+	#
+	# https://github.com/joyent/illumos-joyent/issues/179
+	#
+	if (($num_groups > 2)); then
+		# typeset classify=hw
+		typeset classify=sw
+	fi
+
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic -v $VID $send $send_vn1
+	create_addr $send_vn1 $send_ip1
+	dladm create-vlan -t -l $recv -v $VID $recv_vn1
+	create_addr $recv_vn1 $recv_ip1
+
+	send_traffic -c $classify $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip1 $recv_ip1 $recv_vn1
+
+	delete_interface $send
+	delete_interface $recv
+	delete_interface $send_vn1
+	delete_interface $recv_vn1
+	delete_vnic $send_vn1
+	if ! dladm delete-vlan -t $recv_vn1; then
+		fail "failed to delete VLAN $recv_vn"
+	fi
+
+	pass
+}
+
+function test_mac_aggr_vnic
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset recv_ip=${IPS[1]}
+	typeset recv_ip1=${IPS[2]}
+	typeset recv_vn1=mt_recv1
+
+	TNAME="$0<$recv>"
+
+	verify_aggr $send
+	verify_aggr $recv
+	typeset rport1=$(get_aggr_port $recv)
+	typeset primary_classify=sw
+	typeset classify=sw
+	typeset num_groups=$(get_num_groups $rport1)
+	#
+	# This is different from the previous two tests. We now have
+	# two clients, the primary and a VNIC. In the case of a part
+	# that has multiple groups we can properly hw classify the
+	# VNIC, but the primary still have the same issue as the other
+	# tests.
+	#
+	# https://github.com/joyent/illumos-joyent/issues/179
+	#
+	if (($num_groups > 1)); then
+		typeset primary_classify=sw
+		typeset classify=hw
+	fi
+
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic $recv $recv_vn1
+	create_addr $recv_vn1 $recv_ip1
+
+	send_traffic -c $primary_classify $send_ip $recv_ip $recv
+	send_traffic -c $classify $send_ip $recv_ip1 $recv_vn1
+
+	delete_interface $send
+	delete_interface $recv
+	delete_interface $recv_vn1
+	delete_vnic $recv_vn1
+
+	pass
+}
+
+
+# Verify that two VNICs can coexist on the same aggr and receive traffic.
+#
+function test_mac_aggr_two_vnics
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset recv_ip=${IPS[1]}
+	typeset recv_ip1=${IPS[2]}
+	typeset recv_ip2=${IPS[3]}
+	typeset recv_vn1=mt_recv1
+	typeset recv_vn2=mt_recv2
+
+	TNAME="$0<$recv>"
+
+	verify_aggr $send
+	verify_aggr $recv
+	typeset rport1=$(get_aggr_port $recv)
+	typeset primary_classify=sw
+	typeset classify=sw
+	typeset num_groups=$(get_num_groups $rport1)
+	#
+	# This is different from the previous two tests. We now have
+	# two clients, the primary and a VNIC. In the case of a part
+	# that has multiple groups we can properly hw classify the
+	# VNIC, but the primary still have the same issue as the other
+	# tests.
+	#
+	# https://github.com/joyent/illumos-joyent/issues/179
+	#
+	if (($num_groups > 1)); then
+		# Needs 4 groups: default, primary, vnic1, vnic2.
+		verify_num_groups_gte $rport1 4
+		typeset primary_classify=sw
+		typeset classify=hw
+	fi
+
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic $recv $recv_vn1
+	create_addr $recv_vn1 $recv_ip1
+	create_vnic $recv $recv_vn2
+	create_addr $recv_vn2 $recv_ip2
+
+	send_traffic -c $primary_classify $send_ip $recv_ip $recv
+	send_traffic -c $classify $send_ip $recv_ip1 $recv_vn1
+	send_traffic -c $classify $send_ip $recv_ip2 $recv_vn2
+
+	delete_interface $send
+	delete_interface $recv
+	delete_interface $recv_vn1
+	delete_vnic $recv_vn1
+	delete_interface $recv_vn2
+	delete_vnic $recv_vn2
+
+	pass
+}
+
+#
+# Verify that a single tagged VNIC on an aggr receives traffic via
+# proper classification.
+#
+function test_mac_aggr_vlan
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset send_vn1=mt_send1
+	typeset recv_vn1=mt_recv1
+
+	TNAME="$0<$recv>"
+
+	verify_aggr $send
+	verify_aggr $recv
+	typeset rport1=$(get_aggr_port $recv)
+	typeset primary_classify=sw
+	typeset classify=sw
+	typeset num_groups=$(get_num_groups $rport1)
+	#
+	# This is different from the previous two tests. We now have
+	# two clients, the primary and a VNIC. In the case of a part
+	# that has multiple groups we can properly hw classify the
+	# VNIC, but the primary still have the same issue as the other
+	# tests.
+	#
+	# https://github.com/joyent/illumos-joyent/issues/179
+	#
+	if (($num_groups > 1)); then
+		# Needs 3 groups: default, primary, vnic1.
+		verify_num_groups_gte $rport1 3
+		typeset primary_classify=sw
+		typeset classify=hw
+	fi
+
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic -v $VID $send $send_vn1
+	create_addr $send_vn1 $send_ip1
+	create_vnic -v $VID $recv $recv_vn1
+	create_addr $recv_vn1 $recv_ip1
+
+	send_traffic -c $primary_classify $send_ip $recv_ip $recv
+	send_traffic -c $classify $send_ip1 $recv_ip1 $recv_vn1
+
+	delete_interface $send
+	delete_interface $recv
+	delete_interface $recv_vn1
+	delete_vnic $recv_vn1
+	delete_interface $send_vn1
+	delete_vnic $send_vn1
+
+	pass
+}
+
+#
+# Verify that two tagged VNICs on the same aggr receive traffic via
+# proper classification.
+#
+function test_mac_aggr_two_vlans
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset recv_ip2=${IPS[4]}
+	typeset send_vn1=mt_send1
+	typeset recv_vn1=mt_recv1
+	typeset recv_vn2=mt_recv2
+
+	TNAME="$0<$recv>"
+
+	verify_aggr $send
+	verify_aggr $recv
+	typeset rport1=$(get_aggr_port $recv)
+	typeset primary_classify=sw
+	typeset classify=sw
+	typeset num_groups=$(get_num_groups $rport1)
+	#
+	# This is different from the previous two tests. We now have
+	# two clients, the primary and a VNIC. In the case of a part
+	# that has multiple groups we can properly hw classify the
+	# VNIC, but the primary still have the same issue as the other
+	# tests.
+	#
+	# https://github.com/joyent/illumos-joyent/issues/179
+	#
+	if (($num_groups > 1)); then
+		# Needs 3 groups: default, primary, vnic1, vnic2.
+		verify_num_groups_gte $rport1 4
+		typeset primary_classify=sw
+		typeset classify=hw
+	fi
+
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic -v $VID $recv $recv_vn1
+	create_addr $recv_vn1 $recv_ip1
+	create_vnic -v $VID $recv $recv_vn2
+	create_addr $recv_vn2 $recv_ip2
+	create_vnic -v $VID $send $send_vn1
+	create_addr $send_vn1 $send_ip1
+
+	send_traffic -c $primary_classify $send_ip $recv_ip $recv
+	send_traffic -c $classify $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c $classify $send_ip1 $recv_ip2 $recv_vn2
+
+	delete_interface $send
+	delete_interface $recv
+	delete_interface $recv_vn1
+	delete_vnic $recv_vn1
+	delete_interface $recv_vn2
+	delete_vnic $recv_vn2
+	delete_interface $send_vn1
+	delete_vnic $send_vn1
+
+	pass
+}
+
+#
+# Verify that two tagged VNICs sharing the same MAC address are
+# software classified and that they are placed on the default group.
+#
+function test_mac_aggr_vlans_shared_addr
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset vid1=$VID
+	typeset vid2=$(($VID + 1))
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset send_ip2=${IPS[2]}
+	typeset recv_ip=${IPS[3]}
+	typeset recv_ip1=${IPS[4]}
+	typeset recv_ip2=${IPS[5]}
+	typeset send_vn1="mt_send1"
+	typeset send_vn2="mt_send2"
+	typeset recv_vn1="mt_recv1"
+	typeset recv_vn2="mt_recv2"
+
+	TNAME="$0<$recv>"
+
+	verify_aggr $send
+	verify_aggr $recv
+	typeset rport1=$(get_aggr_port $recv)
+	typeset primary_classify=sw
+	typeset num_groups=$(get_num_groups $rport1)
+	#
+	# This is different from the previous two tests. We now have
+	# two clients, the primary and a VNIC. In the case of a part
+	# that has multiple groups we can properly hw classify the
+	# VNIC, but the primary still have the same issue as the other
+	# tests.
+	#
+	# https://github.com/joyent/illumos-joyent/issues/179
+	#
+	if (($num_groups > 1)); then
+		# Needs 3 groups: default, primary, vnic1, vnic2.
+		verify_num_groups_gte $rport1 4
+		typeset primary_classify=sw
+	fi
+
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic -v $vid1 $send $send_vn1
+	create_vnic -v $vid2 $send $send_vn2
+	create_vnic -v $vid1 $recv $recv_vn1
+	typeset addr1=$(get_macaddr $recv_vn1)
+	create_vnic -m $addr1 -v $vid2 $recv $recv_vn2
+	typeset addr2=$(get_macaddr $recv_vn2)
+
+	if [[ "$addr1" != "$addr2" ]]; then
+		fail "VNICs $recv_vn1 and $recv_vn2 don't have the same" \
+		     "MAC address: $addr1 != $addr2"
+	fi
+
+	verify_sw_lanes $recv_vn1
+	verify_sw_lanes $recv_vn2
+	create_addr $send_vn1 $send_ip1
+	create_addr $send_vn2 $send_ip2
+	create_addr $recv_vn1 $recv_ip1
+	create_addr $recv_vn2 $recv_ip2
+
+	send_traffic -c $primary_classify $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c sw $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c sw $send_ip2 $recv_ip2 $recv_vn2
+
+	delete_interface $send
+	delete_interface $recv
+	delete_interface $send_vn1
+	delete_vnic $send_vn1
+	delete_interface $send_vn2
+	delete_vnic $send_vn2
+	delete_interface $recv_vn1
+	delete_vnic $recv_vn1
+	delete_interface $recv_vn2
+	delete_vnic $recv_vn2
+
+	pass
+}
+
+function test_mac_aggr_steal_group
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip=${IPS[0]}
+	typeset recv_ip=${IPS[1]}
+	typeset recv_ip1=${IPS[2]}
+	typeset recv_ip_np1=${IPS[3]}
+	typeset recv_ip_np2=${IPS[4]}
+	typeset recv_vn1=mt_recv1
+
+	TNAME="$0<$recv>"
+
+	verify_aggr $send
+	verify_aggr $recv
+	typeset rport1=$(get_aggr_port $recv 1)
+	typeset rport2=$(get_aggr_port $recv 2)
+	if ! has_group_support $rport1 || ! has_group_support $rport2; then
+		skip "both ports must have group support"
+		return 0
+	fi
+
+	verify_num_groups_gte $rport1 4
+	verify_num_groups_gte $rport2 4
+	integer num1=$(($(get_num_groups $rport1) - 2))
+	integer num2=$(($(get_num_groups $rport2) - 2))
+	if (($num1 != $num2)); then
+		fail "aggr ports $recv_port1 and $recv_port2 have different" \
+		     "number of groups ($num1 != $num2)"
+	fi
+	typeset recv_vn_np1="mt_recv$(($num1 + 1))"
+	typeset recv_vn_np2="mt_recv$(($num1 + 2))"
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	for i in {1..$num1}; do
+		create_vnic $recv mt_recv${i}
+	done
+	create_addr $recv_vn1 $recv_ip1
+
+	send_traffic -c $PRIMARY_CLASSIFY $send_ip $recv_ip $recv
+	send_traffic -c hw $send_ip $recv_ip1 $recv_vn1
+
+	#
+	# Create a new VNIC which explicitly requests hardware Rx
+	# rings. Since all reserved groups are taken at this point it
+	# should steal the group from the first client which didn't
+	# explicitly request HW rings: the primary client.
+	#
+	create_vnic -h $recv $recv_vn_np1
+	create_addr $recv_vn_np1 $recv_ip_np1
+
+	send_traffic -c sw $send_ip $recv_ip $recv
+	send_traffic -c hw $send_ip $recv_ip1 $recv_vn1
+	send_traffic -c hw $send_ip $recv_ip_np1 $recv_vn_np1
+
+	#
+	# Create another VNIC requesting HW Rx rings. This should
+	# steal another group, this time from the first VNIC: recv_vn1.
+	#
+	create_vnic -h $recv $recv_vn_np2
+	create_addr $recv_vn_np2 $recv_ip_np2
+
+	send_traffic -c sw $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip $recv_ip1 $recv_vn1
+	send_traffic -c hw $send_ip $recv_ip_np1 $recv_vn_np1
+	send_traffic -c hw $send_ip $recv_ip_np2 $recv_vn_np2
+
+	delete_interface $send
+	delete_interface $recv
+	delete_interface $recv_vn1
+	delete_interface $recv_vn_np1
+	delete_interface $recv_vn_np2
+	delete_vnic $recv_vn_np1
+	delete_vnic $recv_vn_np2
+	for i in {1..$num1}; do
+		delete_vnic mt_recv${i}
+	done
+
+	pass
+}
+
+function test_mac_aggr_vlan_steal_group
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset vid=$VID
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset recv_ip_np1=${IPS[4]}
+	typeset recv_ip_np2=${IPS[5]}
+	typeset send_vn1=mt_send1
+	typeset recv_vn1=mt_recv1
+
+	TNAME="$0<$recv>"
+
+	verify_aggr $send
+	verify_aggr $recv
+	typeset rport1=$(get_aggr_port $recv 1)
+	typeset rport2=$(get_aggr_port $recv 2)
+	if ! has_group_support $rport1 || ! has_group_support $rport2; then
+		skip "both ports must have group support"
+		return 0
+	fi
+	verify_num_groups_gte $rport1 4
+	verify_num_groups_gte $rport2 4
+	integer num1=$(($(get_num_groups $rport1) - 2))
+	integer num2=$(($(get_num_groups $rport2) - 2))
+	if (($num1 != $num2)); then
+		fail "aggr ports $recv_port1 and $recv_port2 have different" \
+		     "number of groups ($num1 != $num2)"
+	fi
+	typeset recv_vn_np1="mt_recv$(($num1 + 1))"
+	typeset recv_vn_np2="mt_recv$(($num1 + 2))"
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	for i in {1..$num1}; do
+		create_vnic -v $vid $recv mt_recv${i}
+	done
+	create_vnic -v $vid $send $send_vn1
+	create_addr $send_vn1 $send_ip1
+	create_addr $recv_vn1 $recv_ip1
+
+	send_traffic -c sw $send_ip $recv_ip $recv
+	send_traffic -c hw $send_ip1 $recv_ip1 $recv_vn1
+
+	#
+	# Create a new VNIC which explicitly requests hardware Rx
+	# rings. Since all reserved groups are taken at this point it
+	# should steal the group from the first client which didn't
+	# explicitly request HW rings: the primary client.
+	#
+	create_vnic -h -v $vid $recv $recv_vn_np1
+	create_interface $recv_vn_np1
+	create_addr $recv_vn_np1 $recv_ip_np1
+
+	send_traffic -c sw $send_ip $recv_ip $recv
+	send_traffic -c hw $send_ip1 $recv_ip_np1 $recv_vn_np1
+
+	#
+	# Create another VNIC requesting HW Rx rings. This should
+	# steal another group, this time from the first VNIC: recv_vn1.
+	#
+	create_vnic -h -v $vid $recv $recv_vn_np2
+	create_addr $recv_vn_np2 $recv_ip_np2
+
+	send_traffic -c sw $send_ip $recv_ip $recv
+	send_traffic -c sw $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c hw $send_ip1 $recv_ip_np1 $recv_vn_np1
+	send_traffic -c hw $send_ip1 $recv_ip_np2 $recv_vn_np2
+
+	delete_interface $send
+	delete_interface $recv
+	delete_interface $send_vn1
+	delete_interface $recv_vn1
+	delete_interface $recv_vn_np1
+	delete_interface $recv_vn_np2
+	delete_vnic $send_vn1
+	for i in {1..$(($num1 + 2))}; do
+		delete_vnic mt_recv${i}
+	done
+
+	pass
+}
+
+#
+# Verify that if you have two tagged VNICs on the same VLAN and you
+# delete one of them, that the other still receives traffic. This
+# verifies the VLAN ref counting in aggr.
+#
+function test_mac_aggr_vlan_ref_count
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset vid=$VID
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset recv_ip=${IPS[2]}
+	typeset recv_ip1=${IPS[3]}
+	typeset recv_ip2=${IPS[4]}
+	typeset send_vn1=mt_send1
+	typeset recv_vn1=mt_recv1
+	typeset recv_vn2=mt_recv2
+
+	TNAME="$0<$recv>"
+
+	verify_aggr $send
+	verify_aggr $recv
+	typeset rport1=$(get_aggr_port $recv 1)
+	typeset rport2=$(get_aggr_port $recv 2)
+	if ! has_group_support $rport1 || ! has_group_support $rport2; then
+		skip "both ports must have group support"
+		return 0
+	fi
+	verify_num_groups_gte $rport1 4
+	verify_num_groups_gte $rport2 4
+	typeset vclassify=$(get_classify_method $recv vlan)
+
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic -v $vid $recv $recv_vn1
+	create_addr $recv_vn1 $recv_ip1
+	create_vnic -v $vid $recv $recv_vn2
+	create_addr $recv_vn2 $recv_ip2
+	create_vnic -v $vid $send $send_vn1
+	create_addr $send_vn1 $send_ip1
+
+	send_traffic -c sw $send_ip $recv_ip $recv
+	send_traffic -c $vclassify $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c $vclassify $send_ip1 $recv_ip2 $recv_vn2
+
+	delete_interface $recv_vn2
+	delete_vnic $recv_vn2
+
+	send_traffic -c sw $send_ip $recv_ip $recv
+	send_traffic -c $vclassify $send_ip1 $recv_ip1 $recv_vn1
+
+	delete_interface $send
+	delete_interface $recv
+	delete_interface $recv_vn1
+	delete_vnic $recv_vn1
+	delete_interface $send_vn1
+	delete_vnic $send_vn1
+
+	pass
+}
+
+#
+# Verify that an untagged VNIC and tagged VNIC can coexist on the same
+# aggr and still receive data.
+#
+function test_mac_aggr_vnic_and_vlan
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset vid=$VID
+	typeset send_ip=${IPS[0]}
+	typeset send_ip1=${IPS[1]}
+	typeset send_ip2=${IPS[2]}
+	typeset recv_ip=${IPS[3]}
+	typeset recv_ip1=${IPS[4]}
+	typeset recv_ip2=${IPS[5]}
+	typeset send_vn1=mt_send1
+	typeset send_vn2=mt_send2
+	typeset recv_vn1=mt_recv1
+	typeset recv_vn2=mt_recv2
+
+	TNAME="$0<$recv>"
+
+	verify_aggr $send
+	verify_aggr $recv
+	typeset rport1=$(get_aggr_port $recv 1)
+	typeset rport2=$(get_aggr_port $recv 2)
+	if ! has_group_support $rport1 || ! has_group_support $rport2; then
+		skip "both ports must have group support"
+		return 0
+	fi
+	verify_num_groups_gte $rport1 4
+	verify_num_groups_gte $rport2 4
+	integer num1=$(($(get_num_groups $rport1) - 2))
+	integer num2=$(($(get_num_groups $rport2) - 2))
+	if (($num1 != $num2)); then
+		fail "aggr ports $recv_port1 and $recv_port2 have different" \
+		     "number of groups ($num1 != $num2)"
+	fi
+	typeset uclassify=$(get_classify_method $recv untagged)
+	typeset vclassify=$(get_classify_method $recv vlan)
+
+	create_addr $send $send_ip
+	create_addr $recv $recv_ip
+	create_vnic $recv $recv_vn1
+	create_addr $recv_vn1 $recv_ip1
+	create_vnic -v $vid $recv $recv_vn2
+	create_addr $recv_vn2 $recv_ip2
+	create_vnic $send $send_vn1
+	create_addr $send_vn1 $send_ip1
+	create_vnic -v $vid $send $send_vn2
+	create_addr $send_vn2 $send_ip2
+
+	send_traffic -c sw $send_ip $recv_ip $recv
+	send_traffic -c $uclassify $send_ip1 $recv_ip1 $recv_vn1
+	send_traffic -c $vclassify $send_ip2 $recv_ip2 $recv_vn2
+
+	delete_interface $send
+	delete_interface $recv
+	delete_interface $recv_vn1
+	delete_interface $recv_vn2
+	delete_interface $send_vn1
+	delete_interface $send_vn2
+	delete_vnic $recv_vn1
+	delete_vnic $recv_vn2
+	delete_vnic $send_vn1
+	delete_vnic $send_vn2
+
+	pass
+}
+
+# ============================================================
+# MAIN
+# ============================================================
+AGGR=0
+CLASSIFY=hwlane
+DEBUG=0
+GATE=0
+IP_SUBNET=192.168.66
+PRE_AGGR_MAC_GROUP=0
+#
+# We should expect hardware classification on the primary interface
+# post aggr mac groups (SmartOS OS-6719), however:
+#
+# 1. This isn't true for a 9000 MTU because the port SDU change causes
+#    us to enter SW classify (verified on SmartOS only, not sure if
+#    this holds for other distros).
+#
+# 2. This isn't true even without the MTU change because the primary
+#    client ends up on the default group. This should be fixed in a
+#    follow up.
+#
+PRIMARY_CLASSIFY=swlane
+TNAME=""
+
+#
+# This function didn't exist until aggr mac group support was added.
+#
+if ! nm /kernel/drv/amd64/aggr | \
+		grep aggr_pseudo_start_rx_ring > /dev/null
+then
+	CLASSIFY=swlane
+	PRE_AGGR_MAC_GROUP=1
+	PRIMARY_CLASSIFY=swlane
+	printf "ERROR: these tests only verified for post aggr-group work"
+	printf "(commit 45948e4)\n"
+	exit 1
+fi
+
+while getopts ":adgs:" opt
+do
+	case $opt in
+	a)
+		AGGR=1
+		;;
+	d)
+		DEBUG=1
+		;;
+	g)
+		GATE=1
+		;;
+	s)
+		IP_SUBNET=$OPTARG
+		;;
+
+	':')
+		fail "missing argument to $OPTARG"
+		;;
+
+	'?')
+		fail "unknown option '$OPTARG'"
+		;;
+	esac
+done
+shift $((OPTIND -1))
+
+if (($AGGR == 1)) && (($# != 4)) && (($# != 2)); then
+	echo "$0 <send nic> <recv nic>" >&2
+	printf "$0 -a <send aggr p1> <send aggr p2>" >&2
+	printf " <recv aggr p1> <recv aggr p2>\n" >&2
+	exit 1
+fi
+
+if (($DEBUG == 1)); then
+	set -x
+	#
+	# This is needed to trace inside functions too since they are
+	# defined with the `function foo ...` syntax.
+	#
+	typeset -tf $(typeset +f)
+fi
+
+if (($AGGR == 0)); then
+	SEND_NIC=$1
+	RECV_NIC=$2
+else
+	SPORT1=$1
+	SPORT2=$2
+	RPORT1=$3
+	RPORT2=$4
+fi
+
+IPS[0]=$IP_SUBNET.1
+IPS[1]=$IP_SUBNET.2
+IPS[2]=$IP_SUBNET.3
+IPS[3]=$IP_SUBNET.4
+IPS[4]=$IP_SUBNET.5
+IPS[5]=$IP_SUBNET.6
+
+VID=5
+
+for ip in ${IPS[@]}
+do
+	verify_no_ip $ip
+done
+
+if ! which socat > /dev/null 2>&1; then
+	fail "socat is required"
+fi
+
+if ! ipadm show-prop -co current -p hostmodel ipv4 |
+		grep src-priority > /dev/null; then
+	fail "ipv4 hostmodel must be 'src-priority'"
+fi
+
+# TODO: verify port1 and port1 are different ports
+
+if (($AGGR == 0)); then
+	test_mac_vnic_rx $SEND_NIC $RECV_NIC
+	test_mac_vlan_rx $SEND_NIC $RECV_NIC
+	test_mac_sw_to_hw $SEND_NIC $RECV_NIC
+	test_mac_promisc $SEND_NIC $RECV_NIC
+	test_mac_promisc_vlan $SEND_NIC $RECV_NIC
+	test_mac_all_groups $SEND_NIC $RECV_NIC
+	test_mac_vlan_all_groups $SEND_NIC $RECV_NIC
+	test_mac_steal_group $SEND_NIC $RECV_NIC
+	test_mac_vlan_steal_group $SEND_NIC $RECV_NIC
+	test_mac_groups_vlan_shared_addr $SEND_NIC $RECV_NIC
+	test_mac_vlan_shared_addr $SEND_NIC $RECV_NIC
+	test_mac_two_vlans_on_default $SEND_NIC $RECV_NIC
+fi
+
+if (($AGGR == 0)) && is_nic_type $RECV_NIC ixgbe; then
+	test_mac_ixgbe_many_vlans $SEND_NIC $RECV_NIC
+	test_mac_ixgbe_vfta_repeated_vid $SEND_NIC $RECV_NIC
+	test_mac_ixgbe_vlvfb_missing_default $SEND_NIC $RECV_NIC
+fi
+
+if (($AGGR == 1)); then
+	SENDA=aggr_send1
+	RECVA=aggr_recv1
+
+	create_aggr $SENDA $SPORT1 $SPORT2
+	wait_for_link_up $SENDA 10
+	create_aggr $RECVA $RPORT1 $RPORT2
+	wait_for_link_up $RECVA 10
+
+	test_mac_aggr_primary $SENDA $RECVA
+	test_mac_aggr_primary_vlan $SENDA $RECVA
+	test_mac_aggr_vnic $SENDA $RECVA
+	test_mac_aggr_two_vnics $SENDA $RECVA
+	test_mac_aggr_vlan $SENDA $RECVA
+	test_mac_aggr_two_vlans $SENDA $RECVA
+	test_mac_aggr_vlans_shared_addr $SENDA $RECVA
+	test_mac_aggr_steal_group $SENDA $RECVA
+	test_mac_aggr_vlan_steal_group $SENDA $RECVA
+	test_mac_aggr_vlan_ref_count $SENDA $RECVA
+	test_mac_aggr_vnic_and_vlan $SENDA $RECVA
+
+	delete_aggr $SENDA
+	delete_aggr $RECVA
+fi
