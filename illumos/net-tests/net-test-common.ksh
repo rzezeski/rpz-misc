@@ -334,6 +334,28 @@ function is_aggr
 	fi
 }
 
+function create_vlan
+{
+	typeset link=$1
+	typeset vid=$2
+	typeset name="${link}_${vid}"
+
+	dladm create-vlan -t -l $link -v $vid $name
+
+	if [[ $? -ne 0 ]]; then
+		fail "failed to create VLAN $name ($vid) over $link"
+	fi
+
+	echo "$name"
+}
+
+function delete_vlan
+{
+	typeset name=$1
+
+	dladm delete-vlan -t $name
+}
+
 function create_vnic
 {
 	typeset addr_str=""

@@ -117,6 +117,78 @@ function cleanup_test_lso_ip6_primary
 }
 
 #
+# Verify IPv6 LSO on primary VLAN interfaces of $send
+#
+function test_lso_ip6_primary_vlan
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip1=${IP6[0]}
+	typeset recv_ip1=${IP6[1]}
+	typeset vid=9
+
+	#
+	# TODO: An idea to flesh out later.
+	#
+	# if (($CLEANUP_ONLY == 1)); then
+	# 	cleanup_test_lso_ip6_primary $send $recv
+	# fi
+
+	TNAME="$0<$send>"
+	typeset pcap=/tmp/$TNAME.pcap
+
+	verify_nic $send
+	verify_nic $recv
+
+	typeset send_vlan=$(create_vlan $send $vid)
+	typeset recv_vlan=$(create_vlan $recv $vid)
+
+	#
+	# The ipv6 hostmodel must be set to src-priority so that two
+	# interfaces on the same subnet will NOT go over the local
+	# route but instead be sent across the physical interfaces.
+	#
+	verify_ip6_hostmodel
+
+	create_addr6 $send_vlan $send_ip1
+	create_addr6 $recv_vlan $recv_ip1
+
+	# Assumes untagged for now.
+	typeset mtu=$(get_mtu $send)
+	typeset maxpkt=$((mtu + 14))
+
+	#
+	# Capture only packets larger than MTU, if pcap is empty we
+	# know we failed.
+	#
+	typeset filt="(src $send_ip1) and (dst $recv_ip1) and (greater $maxpkt)"
+	$SNOOP -q -d $send_vlan -o $pcap "$filt" > /dev/null 2>&1 &
+	typeset snoop_pid=$!
+
+	send_traffic -6 $send_ip1 $recv_ip1 $recv_vlan
+
+	kill -s TERM $snoop_pid
+	if ! $SNOOP -p 1 -i $pcap | grep "Len=" > /dev/null && (($NO_TSO6 == 0))
+	then
+		fail "$send sent no packets greater than MTU"
+	fi
+
+	cleanup_test_lso_ip6_primary_vlan $send_vlan $recv_vlan
+	pass
+}
+
+function cleanup_test_lso_ip6_primary_vlan
+{
+	typeset send_vlan=$1
+	typeset recv_vlan=$2
+
+	delete_interface $send_vlan
+	delete_interface $recv_vlan
+	delete_vlan $send_vlan
+	delete_vlan $recv_vlan
+}
+
+#
 # Verify IPv4 LSO on VNIC on top of $send.
 #
 function test_lso_ip4_vnic
@@ -344,7 +416,7 @@ function test_lso_ip6_mac_loopback
 	pass
 }
 
-DEBUG=0
+DEBUG=${DEBUG:-0}
 IP_SUBNET=192.168.66
 #
 # If set to 1 it indicates that there is no TSO IPv6 support.
@@ -432,6 +504,7 @@ echo "% mac sw LSO is updated to handle IPv6 -- for now these    %"
 echo "% tests only verify that traffic is sent, not LSO.         %"
 echo "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
 test_lso_ip6_primary $send_nic $recv_nic
+test_lso_ip6_primary_vlan $send_nic $recv_nic
 test_lso_ip6_vnic $send_nic $recv_nic
 test_lso_ip6_mac_loopback $send_nic
 
