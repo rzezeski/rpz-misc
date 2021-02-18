@@ -208,9 +208,8 @@ function test_lso_ip6_primary_vlan
 	create_addr6 $send_vlan $send_ip1
 	create_addr6 $recv_vlan $recv_ip1
 
-	# Assumes untagged for now.
 	typeset mtu=$(get_mtu $send)
-	typeset maxpkt=$((mtu + 14))
+	typeset maxpkt=$((mtu + 18))
 
 	#
 	# Capture only packets larger than MTU, if pcap is empty we
@@ -302,6 +301,64 @@ function test_lso_ip4_vnic
 }
 
 #
+# Verify IPv4 LSO on a tagged VNIC on top of $send.
+#
+function test_lso_ip4_vnic_vlan
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip1=${IP4[2]}
+	typeset recv_ip1=${IP4[3]}
+	typeset send_vn1="lt_send1"
+	typeset recv_vn1="lt_recv1"
+	typeset vid=9
+
+	TNAME="$0<$send>"
+	typeset pcap=/tmp/$TNAME.pcap
+
+	verify_nic $send
+	verify_nic $recv
+
+	#
+	# The ipv4 hostmodel must be set to src-priority so that two
+	# interfaces on the same subnet will NOT go over the local
+	# route but instead be sent across the physical interfaces.
+	#
+	verify_ip4_hostmodel
+
+	create_vnic -v $vid $send $send_vn1
+	create_vnic -v $vid $recv $recv_vn1
+	create_addr $send_vn1 $send_ip1
+	create_addr $recv_vn1 $recv_ip1
+
+	typeset mtu=$(get_mtu $send_vn1)
+	typeset maxpkt=$((mtu + 18))
+
+	#
+	# Capture only packets larger than MTU, if pcap is empty we
+	# know we failed.
+	#
+	typeset filt="(src $send_ip1) and (dst $recv_ip1) and (greater $maxpkt)"
+	$SNOOP -q -d $send_vn1 -o $pcap "$filt" > /dev/null 2>&1 &
+	typeset snoop_pid=$!
+
+	send_traffic $send_ip1 $recv_ip1 $recv_vn1
+
+	kill -s TERM $snoop_pid
+	if ! $SNOOP -p 1 -i $pcap | grep "Len=" > /dev/null
+	then
+		fail "$send_vn1 sent no packets greater than MTU"
+	fi
+
+	# TODO: modify to take multiple args to delete at once.
+	delete_interface $send_vn1
+	delete_interface $recv_vn1
+	delete_vnic $send_vn1
+	delete_vnic $recv_vn1
+	pass
+}
+
+#
 # Verify IPv6 LSO on VNIC on top of $send.
 #
 function test_lso_ip6_vnic
@@ -334,6 +391,64 @@ function test_lso_ip6_vnic
 	# Assumes untagged for now.
 	typeset mtu=$(get_mtu $send_vn1)
 	typeset maxpkt=$((mtu + 14))
+
+	#
+	# Capture only packets larger than MTU, if pcap is empty we
+	# know we failed.
+	#
+	typeset filt="(src $send_ip1) and (dst $recv_ip1) and (greater $maxpkt)"
+	$SNOOP -q -d $send_vn1 -o $pcap "$filt" > /dev/null 2>&1 &
+	typeset snoop_pid=$!
+
+	send_traffic -6 $send_ip1 $recv_ip1 $recv_vn1
+
+	kill -s TERM $snoop_pid
+	if ! $SNOOP -p 1 -i $pcap | grep "Len=" > /dev/null && (($NO_TSO6 == 0))
+	then
+		fail "$send_vn1 sent no packets greater than MTU"
+	fi
+
+	# TODO: modify to take multiple args to delete at once.
+	delete_interface $send_vn1
+	delete_interface $recv_vn1
+	delete_vnic $send_vn1
+	delete_vnic $recv_vn1
+	pass
+}
+
+#
+# Verify IPv6 LSO on tagged VNIC on top of $send.
+#
+function test_lso_ip6_vnic_vlan
+{
+	typeset send=$1
+	typeset recv=$2
+	typeset send_ip1=${IP6[2]}
+	typeset recv_ip1=${IP6[3]}
+	typeset send_vn1="lt_send1"
+	typeset recv_vn1="lt_recv1"
+	typeset vid=9
+
+	TNAME="$0<$send>"
+	typeset pcap=/tmp/$TNAME.pcap
+
+	verify_nic $send
+	verify_nic $recv
+
+	#
+	# The ipv6 hostmodel must be set to src-priority so that two
+	# interfaces on the same subnet will NOT go over the local
+	# route but instead be sent across the physical interfaces.
+	#
+	verify_ip6_hostmodel
+
+	create_vnic -v $vid $send $send_vn1
+	create_vnic -v $vid $recv $recv_vn1
+	create_addr6 $send_vn1 $send_ip1
+	create_addr6 $recv_vn1 $recv_ip1
+
+	typeset mtu=$(get_mtu $send_vn1)
+	typeset maxpkt=$((mtu + 18))
 
 	#
 	# Capture only packets larger than MTU, if pcap is empty we
@@ -416,6 +531,62 @@ function test_lso_ip4_mac_loopback
 }
 
 #
+# Verify tagged IPv4 LSO traveling over mac-loopback on $send.
+#
+function test_lso_ip4_mac_loopback_vlan
+{
+	typeset send=$1
+	typeset send_ip1=${IP4[1]}
+	typeset recv_ip1=${IP4[2]}
+	typeset send_vn1="lt_send1"
+	typeset recv_vn1="lt_recv1"
+	typeset vid=9
+
+	TNAME="$0<$send>"
+	typeset pcap=/tmp/$TNAME.pcap
+
+	verify_nic $send
+
+	#
+	# The ipv4 hostmodel must be set to src-priority so that two
+	# interfaces on the same subnet will NOT go over the local
+	# route but instead be sent across the physical interfaces.
+	#
+	verify_ip4_hostmodel
+
+	create_vnic -v $vid $send $send_vn1
+	create_vnic -v $vid $send $recv_vn1
+	create_addr $send_vn1 $send_ip1
+	create_addr $recv_vn1 $recv_ip1
+
+	typeset mtu=$(get_mtu $send_vn1)
+	typeset maxpkt=$((mtu + 18))
+
+	#
+	# Capture only packets larger than MTU, if pcap is empty we
+	# know we failed.
+	#
+	typeset filt="(src $send_ip1) and (dst $recv_ip1) and (greater $maxpkt)"
+	$SNOOP -q -d $send_vn1 -o $pcap "$filt" > /dev/null 2>&1 &
+	typeset snoop_pid=$!
+
+	send_traffic $send_ip1 $recv_ip1 $recv_vn1
+
+	kill -s TERM $snoop_pid
+	if ! $SNOOP -p 1 -i $pcap | grep "Len=" > /dev/null
+	then
+		fail "$send_vn1 sent no packets greater than MTU"
+	fi
+
+	# TODO: modify to take multiple args to delete at once.
+	delete_interface $send_vn1
+	delete_interface $recv_vn1
+	delete_vnic $send_vn1
+	delete_vnic $recv_vn1
+	pass
+}
+
+#
 # Verify IPv6 LSO traveling over mac-loopback on $send.
 #
 function test_lso_ip6_mac_loopback
@@ -446,6 +617,62 @@ function test_lso_ip6_mac_loopback
 	# Assumes untagged for now.
 	typeset mtu=$(get_mtu $send_vn1)
 	typeset maxpkt=$((mtu + 14))
+
+	#
+	# Capture only packets larger than MTU, if pcap is empty we
+	# know we failed.
+	#
+	typeset filt="(src $send_ip1) and (dst $recv_ip1) and (greater $maxpkt)"
+	$SNOOP -q -d $send_vn1 -o $pcap "$filt" > /dev/null 2>&1 &
+	typeset snoop_pid=$!
+
+	send_traffic -6 $send_ip1 $recv_ip1 $recv_vn1
+
+	kill -s TERM $snoop_pid
+	if ! $SNOOP -p 1 -i $pcap | grep "Len=" > /dev/null && (($NO_TSO6 == 0))
+	then
+		fail "$send_vn1 sent no packets greater than MTU"
+	fi
+
+	# TODO: modify to take multiple args to delete at once.
+	delete_interface $send_vn1
+	delete_interface $recv_vn1
+	delete_vnic $send_vn1
+	delete_vnic $recv_vn1
+	pass
+}
+
+#
+# Verify tagged IPv6 LSO traveling over mac-loopback on $send.
+#
+function test_lso_ip6_mac_loopback_vlan
+{
+	typeset send=$1
+	typeset send_ip1=${IP6[2]}
+	typeset recv_ip1=${IP6[3]}
+	typeset send_vn1="lt_send1"
+	typeset recv_vn1="lt_recv1"
+	typeset vid=9
+
+	TNAME="$0<$send>"
+	typeset pcap=/tmp/$TNAME.pcap
+
+	verify_nic $send
+
+	#
+	# The ipv6 hostmodel must be set to src-priority so that two
+	# interfaces on the same subnet will NOT go over the local
+	# route but instead be sent across the physical interfaces.
+	#
+	verify_ip6_hostmodel
+
+	create_vnic -v $vid $send $send_vn1
+	create_vnic -v $vid $send $recv_vn1
+	create_addr6 $send_vn1 $send_ip1
+	create_addr6 $recv_vn1 $recv_ip1
+
+	typeset mtu=$(get_mtu $send_vn1)
+	typeset maxpkt=$((mtu + 18))
 
 	#
 	# Capture only packets larger than MTU, if pcap is empty we
@@ -551,7 +778,9 @@ recv_nic=$2
 test_lso_ip4_primary $send_nic $recv_nic
 test_lso_ip4_primary_vlan $send_nic $recv_nic
 test_lso_ip4_vnic $send_nic $recv_nic
-test_lso_ip4_mac_loopback $send_nic $recv_nic
+test_lso_ip4_vnic_vlan $send_nic $recv_nic
+test_lso_ip4_mac_loopback $send_nic
+test_lso_ip4_mac_loopback_vlan $send_nic
 
 echo
 echo "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
@@ -562,9 +791,6 @@ echo "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
 test_lso_ip6_primary $send_nic $recv_nic
 test_lso_ip6_primary_vlan $send_nic $recv_nic
 test_lso_ip6_vnic $send_nic $recv_nic
+test_lso_ip6_vnic_vlan $send_nic $recv_nic
 test_lso_ip6_mac_loopback $send_nic
-
-echo
-echo "TODO"
-echo "\to VLAN VNIC ip4/ip6 tests"
-echo "\to VLAN VNIC ip4/ip6 mac-loopback tests"
+test_lso_ip6_mac_loopback_vlan $send_nic
