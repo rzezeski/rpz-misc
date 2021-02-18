@@ -98,7 +98,7 @@ function test_lso_ip6_primary
 	send_traffic -6 $send_ip1 $recv_ip1 $recv
 
 	kill -s TERM $snoop_pid
-	if ! $SNOOP -p 1 -i $pcap | grep "Len=" > /dev/null && (($NO_LSO == 0))
+	if ! $SNOOP -p 1 -i $pcap | grep "Len=" > /dev/null && (($NO_TSO6 == 0))
 	then
 		fail "$send sent no packets greater than MTU"
 	fi
@@ -219,7 +219,7 @@ function test_lso_ip6_vnic
 	send_traffic -6 $send_ip1 $recv_ip1 $recv_vn1
 
 	kill -s TERM $snoop_pid
-	if ! $SNOOP -p 1 -i $pcap | grep "Len=" > /dev/null && (($NO_LSO == 0))
+	if ! $SNOOP -p 1 -i $pcap | grep "Len=" > /dev/null && (($NO_TSO6 == 0))
 	then
 		fail "$send_vn1 sent no packets greater than MTU"
 	fi
@@ -331,7 +331,7 @@ function test_lso_ip6_mac_loopback
 	send_traffic -6 $send_ip1 $recv_ip1 $recv_vn1
 
 	kill -s TERM $snoop_pid
-	if ! $SNOOP -p 1 -i $pcap | grep "Len=" > /dev/null && (($NO_LSO == 0))
+	if ! $SNOOP -p 1 -i $pcap | grep "Len=" > /dev/null && (($NO_TSO6 == 0))
 	then
 		fail "$send_vn1 sent no packets greater than MTU"
 	fi
@@ -346,6 +346,19 @@ function test_lso_ip6_mac_loopback
 
 DEBUG=0
 IP_SUBNET=192.168.66
+#
+# If set to 1 it indicates that there is no TSO IPv6 support.
+#
+# Unfortunately, because mac-loopback emulation does not yet support
+# IPv6 TSO, we cannot actually allow any mac clients to make use of
+# hardware TSO6, even if the driver advertises the capab. Either we
+# need to add TSO6 support to mac_sw_lso(), or we could perhaps do
+# something like have the IP stack mark all IPv6 packets with some
+# type of NO_MAC_LOOPBACK mblk flag.
+#
+# https://www.illumos.org/issues/12731
+#
+NO_TSO6=1
 TNAME=""
 
 while getopts ":ds:" opt
@@ -412,13 +425,18 @@ test_lso_ip4_primary $send_nic $recv_nic
 test_lso_ip4_vnic $send_nic $recv_nic
 test_lso_ip4_mac_loopback $send_nic $recv_nic
 
-NO_LSO=1
 echo
 echo "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
 echo "% The following tests will elide the LSO check until the   %"
 echo "% mac sw LSO is updated to handle IPv6 -- for now these    %"
-echo "& tests only verify that traffic is sent, not LSO.         %"
+echo "% tests only verify that traffic is sent, not LSO.         %"
 echo "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
 test_lso_ip6_primary $send_nic $recv_nic
 test_lso_ip6_vnic $send_nic $recv_nic
 test_lso_ip6_mac_loopback $send_nic
+
+echo
+echo "TODO"
+echo "\to VLAN ip4/ip6 primary test"
+echo "\to VLAN ip4/ip6 VNIC tests"
+echo "\to VLAN VNIC ip4/ip6 mac-loopback tests"
