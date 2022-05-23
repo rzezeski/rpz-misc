@@ -151,7 +151,7 @@ with ownership $LOGNAME:staff"
 	info "Checking for copy of illumos-gate"
 	if [ ! -d $GATE_DIR ]; then
 		cd $CODE_DIR
-		git clone git://github.com/illumos/illumos-gate.git
+		git clone https://github.com/illumos/illumos-gate.git
 	fi
 	set +e
 }
