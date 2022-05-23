@@ -76,65 +76,6 @@ $ sudo beadm destroy nightly
 }
 
 #
-# Determine the OS: set OS_NAME and OS_VSN. Fail if unsupported.
-#
-check_os()
-{
-	OS="unknown"
-
-	if [ ! -e /etc/release ]; then
-		echo "ERROR: couldn't determine OS" >&2
-	fi
-
-	if grep -i 'omnios' /etc/release > /dev/null; then
-		OS_STR=$(sed -En -e 's/^ *//g' -e '1p' /etc/release)
-		OS_NAME=$(echo $OS_STR | awk '{print $1}')
-		OS_VSN=$(echo $OS_STR | awk '{print $3}')
-	elif grep -i 'openindiana' /etc/release > /dev/null; then
-		OS_STR=$(sed -En -e 's/^ *//g' -e '1p' /etc/release)
-		OS_NAME=$(echo $OS_STR | awk '{print $1}')
-		OS_VSN=$(echo $OS_STR | awk '{print $3}')
-		if ! pkg publisher -H | grep hipster > /dev/null; then
-			echo "ERROR: Must build on OI Hipster"
-			echo "http://dlc.openindiana.org/isos/hipster/"
-			exit 1
-		fi
-	else
-		echo "ERROR: couldn't determine OS" 2>&2
-		exit 1
-	fi
-
-	case $OS_NAME in
-	OmniOS)
-		# Remove the 'r' prefix.
-		OS_VSN=$(echo $OS_VSN | tr -d r)
-
-		case $OS_VSN in
-		151042) ;;
-		*)
-			echo "ERROR: unsupported version of \
-OmniOS: $OS_VSN" 1>&2
-			exit 1
-			;;
-		esac
-		;;
-	OpenIndiana)
-		case $OS_VSN in
-		oi_151.1.8) ;;
-		*)
-			echo "ERROR: untested version of OI" 2>&1
-			exit 1
-			;;
-		esac
-		;;
-	*)
-		echo "ERROR: unsupported OS: $OS" 2>&2
-		exit 1
-		;;
-	esac
-}
-
-#
 # Clone the illumos-gate (ON) source code.
 #
 clone_illumos()
@@ -549,7 +490,6 @@ done
 
 shift $((OPTIND -1))
 
-check_os
 install_pkgs
 clone_illumos
 cd $GATE_DIR
