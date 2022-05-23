@@ -110,7 +110,7 @@ check_os()
 		OS_VSN=$(echo $OS_VSN | tr -d r)
 
 		case $OS_VSN in
-		151014) ;;
+		151042) ;;
 		*)
 			echo "ERROR: unsupported version of \
 OmniOS: $OS_VSN" 1>&2
