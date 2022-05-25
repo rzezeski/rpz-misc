@@ -1,0 +1,108 @@
+== mdb `::dis` on mangled symbol
+
+You have a stack trace with some mangled symbols, and you want to
+inspect the assembly. Typically you can do `<symbol>::dis` and it just
+works.
+
+----
+> $C
+fffffe00050c38b0 _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0x238()
+fffffe00050c3b30 _ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d92()
+fffffe00050c4300 xde_mc_tx+0x290()
+fffffe00050c4330 mac_ring_tx+0x43(fffffe0396759030, 0, fffffe03eab361a0)
+fffffe00050c4380 mac_provider_tx+0x85(fffffe0396759030, 0, fffffe03eab361a0, fffffe0395e3ca00)
+fffffe00050c4440 mac_tx+0x295(fffffe0395e3ca00, fffffe03eab361a0, c072da1a, 1, 0)
+fffffe00050c4490 str_mdata_fastpath_put+0x8e(fffffe038d793398, fffffe03eab361a0, c072da1a, 1)
+fffffe00050c45a0 ip_xmit+0x843(fffffe03eab361a0, fffffe038682f1c0, 180036060, 5dc, c072da1a, 0, fffffe0300000000, fffffe0396ce3930)
+fffffe00050c47f0 ire_send_wire_v4+0x345(fffffe0396d00df0, fffffe03eab361a0, fffffe0385c158b4, fffffe0396ce37c0, fffffe0384b9ea30)
+fffffe00050c4870 conn_ip_output+0x1d4(fffffe03eab361a0, fffffe0396ce37c0)
+fffffe00050c48a0 tcp_send_data+0x58(fffffe0396d0d300, fffffe03eab361a0)
+fffffe00050c49b0 tcp_send+0x8d2(fffffe0396d0d300, 5a8, 34, 20, 0, fffffe00050c4a1c, fffffe00050c4a14, fffffe00050c4a18, fffffe00050c4a20, d5858687aa4)
+fffffe00050c4a80 tcp_wput_data+0x68a(fffffe0396d0d300, fffffe03ea8ada20, 0)
+fffffe00050c4b10 tcp_output+0xbf(fffffe0396d0d000, fffffe03ea8ada20, fffffe0384ba7dc0, 0)
+fffffe00050c4ba0 squeue_enter+0x409(fffffe0384ba7dc0, fffffe03ea8ada20, fffffe03ea8ada20, 1, 0, 4, fffffe0300000007)
+fffffe00050c4c20 tcp_sendmsg+0x16c(fffffe0396d0d000, fffffe03ea8ada20, fffffe00050c4d38, fffffe03933d21a0)
+fffffe00050c4cb0 so_sendmsg+0x24a(fffffe0392fa2a88, fffffe00050c4d38, fffffe00050c4e78, fffffe03933d21a0)
+fffffe00050c4d10 socket_sendmsg+0x62(fffffe0392fa2a88, fffffe00050c4d38, fffffe00050c4e78, fffffe03933d21a0)
+fffffe00050c4db0 socket_vop_write+0x61(fffffe0392fa7a40, fffffe00050c4e78, 0, fffffe03933d21a0, 0)
+fffffe00050c4e30 fop_write+0x60(fffffe0392fa7a40, fffffe00050c4e78, 0, fffffe03933d21a0, 0)
+fffffe00050c4f00 write+0x2c6(4, fffffc7fef23f000, 20000)
+fffffe00050c4f10 sys_syscall+0x17d()
+
+> _ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d92::dis
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d6b:   movb   $0x0,(%rbx)
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d6e:   testq  %r14,%r14
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d71:   je     +0x10    <_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d83>
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d73:   movl   $0x1,%edx
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d78:   movq   %rbx,%rdi
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d7b:   movq   %r14,%rsi
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d7e:   call   -0x35103 <__rust_dealloc>
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d83:   leaq   -0xe0(%rbp),%rdi
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d8a:   movq   %r13,%rsi
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d8d:   call   -0x81c2  <_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E>
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d92:   movq   -0xe0(%rbp),%rax
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d99:   cmpq   $0x5,%rax
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d9d:   jne    +0x5c    <_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2dfb>
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2d9f:   movq   0xfffffffffffffe98(%rbp),%rax
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2da6:   movq   %rax,0x38(%r15)
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2daa:   movq   0xfffffffffffffe90(%rbp),%rax
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2db1:   movq   %rax,0x30(%r15)
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2db5:   movq   0xfffffffffffffe88(%rbp),%rax
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2dbc:   movq   %rax,0x28(%r15)
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2dc0:   movq   0xfffffffffffffe80(%rbp),%rax
+_ZN4opte6engine4port4Port7process17h1da75a5159c16502E+0x2dc7:   movq   %rax,0x20(%r15)
+----
+
+However, for some mangled symbols this will not work.
+
+----
+> _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0x238::dis
+mdb: failed to dereference symbol: unknown symbol name
+----
+
+If you DTrace what's going on with mdb you'll see that invoking
+`::dis` in this manner relies on `yyparse()` being able to handle this
+symbol; but clearly the lex/yacc for mdb is not equipped for dealing
+with the full spectrum of mangled symbols. Even with various attempts
+at quoting the result was always the same.
+
+----
+root@sled1:~# dtrace -p 694 -qn 'pid$target::mdb_nv_lookup:entry { ustack(); printf("%s name: %s\n", probefunc, copyinstr(arg1)); } pid$target::mdb_tgt_lookup_by_name:entry { printf("%s name
+: %s\n", probefunc, copyinstr(arg2)); } pid$target::dis_str2addr:entry { printf("%s name: %s\n", probefunc, copyinstr(arg0)); }'
+mdb_tgt_lookup_by_name name: _ZN4opte6engine6packet42Packet
+
+              mdb`mdb_nv_lookup
+              mdb`mdb_gelf_symtab_lookup_by_name+0x3b
+              mdb`mdb_tgt_lookup_by_name+0x112
+              mdb`yyparse+0x909
+              mdb`mdb_run+0x308
+              mdb`main+0xc11
+              mdb`_start_crt+0x87
+              mdb`_start+0x18
+mdb_nv_lookup name: _ZN4opte6engine6packet42Packet
+----
+
+However, if you look at the `cmd_dis()` code you'll see it can also
+take the symbol as argument. In that case it will pass it to
+`dis_str2addr()`. This works, so long as you quote the symbol.
+However, doing it this way means you must always dissassemble the
+entire function, as there's no way to specify the offset using this
+method.
+
+----
+> ::dis '_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E'
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E:   pushq  %rbp                                                                           _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+1: movq   %rsp,%rbp
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+4: pushq  %r15
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+6: pushq  %r14
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+8: pushq  %r13
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0xa:       pushq  %r12
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0xc:       pushq  %rbx                                                                   _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0xd:       subq   $0xc8,%rsp
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0x14:      movq   %rsi,%r14
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0x17:      movq   %rdi,%r15
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0x1a:      leaq   -0x60(%rbp),%rdi                                                       _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0x1e:      call   +0xaad   <_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parse
+d$GT$13unify_headers17h62d2e3602a8cf826E>
+...
+----
+
+The real solution is to fix the lex/yacc setup for mdb so that it can
+properly deal with the full spectrum of C++/Rust mangled symbols.
