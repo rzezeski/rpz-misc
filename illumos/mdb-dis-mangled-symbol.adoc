@@ -91,16 +91,19 @@ method.
 
 ----
 > ::dis '_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E'
-_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E:   pushq  %rbp                                                                           _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+1: movq   %rsp,%rbp
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E:   pushq  %rbp
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+1: movq   %rsp,%rbp
 _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+4: pushq  %r15
 _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+6: pushq  %r14
 _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+8: pushq  %r13
 _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0xa:       pushq  %r12
-_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0xc:       pushq  %rbx                                                                   _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0xd:       subq   $0xc8,%rsp
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0xc:       pushq  %rbx
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0xd:       subq   $0xc8,%rsp
 _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0x14:      movq   %rsi,%r14
 _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0x17:      movq   %rdi,%r15
-_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0x1a:      leaq   -0x60(%rbp),%rdi                                                       _ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0x1e:      call   +0xaad   <_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parse
-d$GT$13unify_headers17h62d2e3602a8cf826E>
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0x1a:      leaq   -0x60(%rbp),%rdi
+_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$12emit_headers17h18a49ea075c6b454E+0x1e:      call   +0xaad
+<_ZN4opte6engine6packet42Packet$LT$opte..engine..packet..Parsed$GT$13unify_headers17h62d2e3602a8cf826E>
 ...
 ----
 
