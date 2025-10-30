@@ -1,0 +1,881 @@
+= illumos#17340 IPv6 fast path DOA on SmartOS
+:revdate: October 30, 2025
+:revremark: CASE-0001
+
+== 1. Problem
+
+A SmartOS user, Joeri Scapicchio, reported IPv6 connectivity issues
+<<smartos-discuss>> while testing a provisional SmartOS PI based on recent
+enhancements to the IPv6 datapath <<illumos-17340>>.
+
+Joeri's setup consisted of multiple zones in the same IPv4/IPv6 network
+all sitting atop and etherstub. There was also a single VNIC on the same
+network sitting atop the etherstub but in the GZ (global zone). This last
+interface provided networking to the internet and other IP networks owned
+by the user by way of IP forwarding in the GZ.
+
+However, further experimentation by Joeri showed that connectivity was lost not
+only between zones on different physical hosts, but also between two zones on
+the same etherstub. Furthermore, connectivity was restablished when snoop was
+run on the interfaces of *both* zones.
+
+== 2. Cause
+
+The problem is in the illumos-joyent implementation of `dld_capab_poll()`.
+
+----
+static int
+dld_capab_poll(dld_str_t *dsp, void *data, uint_t flags)
+{
+	dld_capab_poll_t	*poll = data;
+
+	ASSERT(MAC_PERIM_HELD(dsp->ds_mh));
+
+	if (dsp->ds_sap == ETHERTYPE_IPV6)
+		return (ENOTSUP);
+...
+}
+----
+
+This suppression of `ETHERTYPE_IPV6` does not exists in illumos-gate, and thus
+the illumos#17340 patch has no effect on this line. The effect can be seen in
+several places. The first and most obvious place is at `dld_capab()` as shown by
+this dtrace output which shows calls to `dld_capab()` as one of the smartos
+zones is starting up and creating its network links (`z13_net0`).
+
+----
+[root@sector1 ~]# dtrace -D SMARTOS -Cqs /data/dtrace/dld_capab.d
+dld_capab_perim => 0
+dld_capab z13_net0 SAP=IPv4 type=DLD_CAPAB_PERIM flag=DLD_ENABLE => 0
+dld_capab_direct => 0
+dld_capab z13_net0 SAP=IPv4 type=DLD_CAPAB_DIRECT flag=DLD_ENABLE => 0
+dld_capab_poll => 0
+dld_capab z13_net0 SAP=IPv4 type=DLD_CAPAB_POLL flag=DLD_ENABLE => 0
+dld_capab_ipcheck => 0
+dld_capab z13_net0 SAP=IPv4 type=DLD_CAPAB_IPCHECK flag=DLD_ENABLE => 0
+dld_capab_lso => 48
+dld_capab z13_net0 SAP=IPv4 type=DLD_CAPAB_LSO flag=DLD_ENABLE => 48
+dld_capab_perim => 0
+dld_capab z13_net0 SAP=IPv4 type=DLD_CAPAB_PERIM flag=DLD_DISABLE => 0
+dld_capab_perim => 0
+dld_capab z13_net0 SAP=IPv6 type=DLD_CAPAB_PERIM flag=DLD_ENABLE => 0
+dld_capab_direct => 48
+dld_capab z13_net0 SAP=IPv6 type=DLD_CAPAB_DIRECT flag=DLD_ENABLE => 48
+dld_capab_poll => 48
+dld_capab z13_net0 SAP=IPv6 type=DLD_CAPAB_POLL flag=DLD_ENABLE => 48
+dld_capab_ipcheck => 0
+dld_capab z13_net0 SAP=IPv6 type=DLD_CAPAB_IPCHECK flag=DLD_ENABLE => 0
+dld_capab_lso => 48
+dld_capab z13_net0 SAP=IPv6 type=DLD_CAPAB_LSO flag=DLD_ENABLE => 48
+dld_capab_perim => 0
+dld_capab z13_net0 SAP=IPv6 type=DLD_CAPAB_PERIM flag=DLD_DISABLE => 0
+----
+
+The `DLD_CAPAB_DIRECT`, `DLD_CAPAB_LSO`, and `DLD_CAPAB_POLL` all return
+`ENOTSUP` (`48`) for the IPv6 ethertype (SAP). In fact, the `ETHERTYPE_IPV6`
+check exists for all three of:
+
+* `dld_capab_direct()`
+* `dld_capab_poll()`
+* `dld_capab_lso()`
+
+These checks should be removed from illumos-joyent with the integration of
+illumos#17340.
+
+To see why the suppression of IPv6 in the `dld_capab()` code causes issue we have
+to look at the Rx SRS fanout processing, the softrings, and DLS.
+
+But first, let's look at the sequence of packets of a successful transfer of a
+small message from the point of view of the server zone.
+
+----
+[root@test2 ~]# snoop -Srd net0
+Using device net0 (promiscuous mode)
+2a01:4f8:241:4bce:1::31 -> 2a01:4f8:241:4bce:1::32 length:   94  TCP D=7777 S=34963 Syn Seq=1757823869 Len=0 Win=32805 Options=<mss 1440,sackOK,tstamp 348855171 0,nop,wscale 5>
+2a01:4f8:241:4bce:1::32 -> 2a01:4f8:241:4bce:1::31 length:   94  TCP D=34963 S=7777 Syn Ack=1757823870 Seq=3246231193 Len=0 Win=32799 Options=<sackOK,tstamp 348855171 348855171,mss 1440,nop,wscale 5>
+2a01:4f8:241:4bce:1::31 -> 2a01:4f8:241:4bce:1::32 length:   86  TCP D=7777 S=34963 Ack=3246231194 Seq=1757823870 Len=0 Win=32844 Options=<nop,nop,tstamp 348855171 348855171>
+2a01:4f8:241:4bce:1::31 -> 2a01:4f8:241:4bce:1::32 length:  110  TCP D=7777 S=34963 Push Ack=3246231194 Seq=1757823870 Len=24 Win=32844 Options=<nop,nop,tstamp 348855171 348855171>
+2a01:4f8:241:4bce:1::32 -> 2a01:4f8:241:4bce:1::31 length:   86  TCP D=34963 S=7777 Ack=1757823894 Seq=3246231194 Len=0 Win=32799 Options=<nop,nop,tstamp 348855171 348855171>
+2a01:4f8:241:4bce:1::31 -> 2a01:4f8:241:4bce:1::32 length:   86  TCP D=7777 S=34963 Fin Ack=3246231194 Seq=1757823894 Len=0 Win=32844 Options=<nop,nop,tstamp 348855171 348855171>
+2a01:4f8:241:4bce:1::32 -> 2a01:4f8:241:4bce:1::31 length:   86  TCP D=34963 S=7777 Ack=1757823895 Seq=3246231194 Len=0 Win=32799 Options=<nop,nop,tstamp 348855171 348855171>
+2a01:4f8:241:4bce:1::32 -> 2a01:4f8:241:4bce:1::31 length:   86  TCP D=34963 S=7777 Fin Ack=1757823895 Seq=3246231194 Len=0 Win=32799 Options=<nop,nop,tstamp 348855172 348855171>
+2a01:4f8:241:4bce:1::31 -> 2a01:4f8:241:4bce:1::32 length:   86  TCP D=7777 S=34963 Ack=3246231195 Seq=1757823895 Len=0 Win=32844 Options=<nop,nop,tstamp 348855172 348855172>
+----
+
+I'll focus on only the first packet, the TCP SYN attempting to establish the
+connection. In particular, keep in mind that the frame is 94 bytes in length.
+
+This script tracks various aspects of the Rx datapath from the SRS upwards. Here
+is the output is produced for that same SYN packet.
+
+----
+[root@sector1 ~]# dtrace -Cqs /data/dtrace/illumos-17340.d
+mac_rx_srs_proto_fanout z7_net0 msgsize(mp)=94
+mac_rx_soft_ring_process mcip=0xfffffe08f0f7c088 softring=0xfffffe090b8cf080 z7_net0 cnt=1 sz=0 msgsize(mp)=80 sr_poll_pkt_cnt=1 s_ring_type=0x80 s_ring_state=0x2 s_ring_first=0x0 proc=mac`mac_rx_deliver
+mci_nvids=0 mci_state_flags=0x125 mci_rx_fn=dls`i_dls_link_rx msglen(mp)=80
+i_dls_link_rx msgsize(mp)=80
+
+              mac`mac_rx_deliver+0x3d
+              mac`mac_rx_soft_ring_process+0x1df
+              mac`mac_rx_srs_proto_fanout+0x3b2
+              mac`mac_rx_srs_drain+0x295
+              mac`mac_srs_worker+0x371
+              unix`thread_start+0xb
+L2 SAP=0x0 LEN=591 SRC=6:3c:2a:1:4:f8 DST=60:0:0:0:0:28
+mac_vlan_header_info => 0
+mod_hash_find_cb_rval key=0x0 => -3 [rval=0]
+----
+
+This is a bit nosiy, but focus on the length, `msgsize(mp)`, between SRS proto
+fanout and softring processing: it is 14 bytes smaller, the length of an
+Ethernet header.
+
+Along with that fact, notice the `s_ring_type=0x80` and
+`proc=mac`mac_rx_deliver` during softring processing. This indicates a TCP6
+softring delivering via `mac_rx_deliver()`, which itself delivers to DLS
+(`i_dls_link_rx()`).
+
+DLS then tries to read the ethernet header and gets very confused since it's
+actually reading the IPv6 header. It reads an ethertype less than 1501 and
+thinks it's dealing with an 802.3 frame, setting the SAP to 0 (`DLS_SAP_LLC`).
+Finally, DLS looks for the stream head bound to this SAP and finds none.
+
+----
+-3 = MH_ERR_NOTFOUND
+----
+
+DLS has no idea what to do with this packet and drops it. This can be confirmed
+by increasing values of the unknowns kstat.
+
+----
+[root@sector1 /data]# kstat -p ::z13_net0:unknowns
+link:0:z13_net0:unknowns        5
+----
+
+So why is the ethernet header stripped before arriving at DLS?
+
+The `mac_rx_srs_proto_fanout()` code strips the header when taking the
+"fastpath". The fastpath has several requirements, one of which is gated on the
+`SRST_DLS_BYPASS` flag. This flag is set by the `mac_soft_ring_dls_bypass()`
+function. No other function can set this flag. But didn't I just demonstrate
+above that the DLD capab code in SmartOS blocks this function from being called
+for IPv6? Let's check the srs_type of the SRS (`z16_net0`).
+
+----
+> ::mac_srs -r
+                                                            MBLK        Q  SR
+            ADDR LINK_NAME            STATE    TYPE          CNT    BYTES CNT
+fffffe08f58c1040 z16_net0             24000002 00003011        0        0   5
+fffffe08f5746780 rge0                 24000002 00003011        0        0   5
+fffffe090affd7c0 z1_net0              24000002 00003011        0        0   5
+----
+
+The `0x3011` type value includes `SRST_DLS_BYPASS` and
+`SRST_CLIENT_POLL_ENABLED`. So it seems DLS bypass is enabled, why? I thought
+SmartOS blocked that for IPv6? Well, it does, but it doesn't block it for IPv4
+and the type applies to the **entire** SRS. We can verify this by tracing the
+various calls that modify s_ring_rx_func during zone creation.
+
+----
+[root@sector1 ~]# dtrace -Cqs /data/dtrace/s_ring_rx_func.d
+mac_soft_ring_create client=tmp278120 ring=mac_tcp_soft_ring_0_fffffe08f58c1040 type=TCP srs=0xfffffe08f58c1040 rx_func=mac`mac_rx_deliver
+
+              mac`mac_srs_create_proto_softrings+0xef
+              mac`mac_srs_fanout_init+0xe2
+              mac`mac_fanout_setup+0x183
+              mac`mac_srs_group_setup+0xc8
+              mac`mac_datapath_setup+0x6bf
+              mac`mac_client_datapath_setup+0x290
+              mac`i_mac_unicast_add+0x4e1
+              mac`mac_unicast_add+0x73
+              vnic`vnic_unicast_add+0x129
+              vnic`vnic_dev_create+0x3b9
+              vnic`vnic_ioc_create+0xe6
+              dld`drv_ioctl+0x172
+              genunix`cdev_ioctl+0x3f
+              specfs`spec_ioctl+0x55
+              genunix`fop_ioctl+0x40
+              genunix`ioctl+0x144
+              unix`sys_syscall32+0x138
+mac_soft_ring_create client=tmp278120 ring=mac_tcp6_soft_ring_0_fffffe08f58c1040 type=TCP6 srs=0xfffffe08f58c1040 rx_func=mac`mac_rx_deliver
+
+              mac`mac_srs_create_proto_softrings+0x451
+              mac`mac_srs_fanout_init+0xe2
+              mac`mac_fanout_setup+0x183
+              mac`mac_srs_group_setup+0xc8
+              mac`mac_datapath_setup+0x6bf
+              mac`mac_client_datapath_setup+0x290
+              mac`i_mac_unicast_add+0x4e1
+              mac`mac_unicast_add+0x73
+              vnic`vnic_unicast_add+0x129
+              vnic`vnic_dev_create+0x3b9
+              vnic`vnic_ioc_create+0xe6
+              dld`drv_ioctl+0x172
+              genunix`cdev_ioctl+0x3f
+              specfs`spec_ioctl+0x55
+              genunix`fop_ioctl+0x40
+              genunix`ioctl+0x144
+              unix`sys_syscall32+0x138
+mac_soft_ring_create client=tmp278120 ring=mac_oth_soft_ring_0_fffffe08f58c1040 type=OTH srs=0xfffffe08f58c1040 rx_func=mac`mac_rx_deliver
+
+              mac`mac_srs_create_proto_softrings+0x38a
+              mac`mac_srs_fanout_init+0xe2
+              mac`mac_fanout_setup+0x183
+              mac`mac_srs_group_setup+0xc8
+              mac`mac_datapath_setup+0x6bf
+              mac`mac_client_datapath_setup+0x290
+              mac`i_mac_unicast_add+0x4e1
+              mac`mac_unicast_add+0x73
+              vnic`vnic_unicast_add+0x129
+              vnic`vnic_dev_create+0x3b9
+              vnic`vnic_ioc_create+0xe6
+              dld`drv_ioctl+0x172
+              genunix`cdev_ioctl+0x3f
+              specfs`spec_ioctl+0x55
+              genunix`fop_ioctl+0x40
+              genunix`ioctl+0x144
+              unix`sys_syscall32+0x138
+mac_soft_ring_dls_bypass client=z16_net0 ring=mac_tcp_soft_ring_0_fffffe08f58c1040 type=TCP srs=0xfffffe08f58c1040 rx_func=ip`ip_input
+
+              mac`mac_srs_client_poll_enable+0x148
+              mac`mac_client_poll_enable+0x4b
+              dld`dld_capab_poll_enable+0x87
+              dld`dld_capab_poll+0x45
+              dld`dld_capab+0x97
+              ip`ill_capability_poll_enable+0x7b
+              ip`ill_capability_dld_enable+0x39
+              ip`ill_capability_dld_ack+0xf6
+              ip`ill_capability_dispatch+0x90
+              ip`ill_capability_ack_thr+0xc6
+              genunix`taskq_d_svc_bucket+0x94
+              genunix`taskq_d_thread+0xb7
+              unix`thread_start+0xb
+^C
+----
+
+Notice that both TCP/TCP6 softrings are initially created with
+`mac_rx_deliver()` as their callback. Then, during interface creation, there is
+a call to `dld_capab_poll()` (for the IPv4 interface) which in turn calls
+`mac_soft_ring_dls_bypass()` which in turn enables DLS bypass on the SRS.
+
+This enables fastpath for both IPv4 and IPv6 (assuming other conditions are
+met), but the IPv6 softrings are still pointing to `mac_rx_deliver()`/DLS,
+resulting in L2-header-stripped IPv6 packets arriving at DLS.
+
+I also wrote a script which shows the result of `mac_rx_srs_proto_fanout()` for
+each packet. Here we can see the SYN packet traveling the TCP6 protocol ring via
+fastpath and that its SRS is DLS-bypass + polling capable.
+
+----
+[root@sector1 ~]# dtrace -Cqs /data/dtrace/illumos-17340-2.d z16_net0
+z16_net0 0xfffffe08f58c1040 SW LINK|FANOUT_PROTO|DLS_BYPASS|CLIENT_POLL|
+        MSGLEN  MEOI PROTOCOLS FASTPATH DISABLE?        SOFTRING
+        94      L4   TCP/IP6   --                       PROTO
+----
+
+Okay, that answers why IPv6 traffic fails, but why does running snoop on both
+zone's links cause traffic to pass again?
+
+First I would expect that the L2 header is no longer stripped. I can confirm
+that with `illumos-17340.d`.
+
+----
+[root@sector1 ~]# dtrace -Cqs /data/dtrace/illumos-17340.d
+mac_rx_srs_proto_fanout z7_net0 msgsize(mp)=94
+mac_rx_soft_ring_process mcip=0xfffffe08f0f7c088 softring=0xfffffe090b8cf380 z7_net0 cnt=1 sz=0 msgsize(mp)=94 sr_poll_pkt_cnt=1 s_ring_type=0x10 s_ring_state=0x2 s_ring_first=0x0 proc=mac`mac_rx_deliver
+mci_nvids=0 mci_state_flags=0x1125 mci_rx_fn=dls`i_dls_link_rx msglen(mp)=94
+i_dls_link_rx msgsize(mp)=94
+
+              mac`mac_rx_deliver+0x3d
+              mac`mac_rx_soft_ring_process+0x1df
+              mac`mac_rx_srs_proto_fanout+0x3b2
+              mac`mac_rx_srs_drain+0x295
+              mac`mac_srs_worker+0x371
+              unix`thread_start+0xb
+L2 SAP=0x86dd LEN=0 SRC=f2:ab:7f:2f:6d:c9 DST=e2:bc:b7:36:c4:db
+mac_vlan_header_info => 0
+mod_hash_find_cb_rval key=0x86dd000 => 0 [rval=0]
+dls_accept => 1
+----
+
+Confirmed. The L2 header remains and DLS is able to key off the IPv6 SAP. What
+about `illumos-17340-2.d`?
+
+----
+[root@sector1 ~]# dtrace -Cqs /data/dtrace/illumos-17340-2.d z7_net0
+z7_net0 0xfffffe090e2ce140 SW LINK|FANOUT_PROTO|DLS_BYPASS|CLIENT_POLL|
+        MSGLEN  MEOI PROTOCOLS FASTPATH DISABLE?        SOFTRING
+        94      L4   TCP/IP6   CLIENT-BYPASS-OFF        OTH (no DLS bypass)
+z7_net0 0xfffffe090e2ce140 SW LINK|FANOUT_PROTO|DLS_BYPASS|CLIENT_POLL|
+        MSGLEN  MEOI PROTOCOLS FASTPATH DISABLE?        SOFTRING
+        86      L4   TCP/IP6   CLIENT-BYPASS-OFF        OTH (no DLS bypass)
+z7_net0 0xfffffe090e2ce140 SW LINK|FANOUT_PROTO|DLS_BYPASS|CLIENT_POLL|
+        MSGLEN  MEOI PROTOCOLS FASTPATH DISABLE?        SOFTRING
+        110     L4   TCP/IP6   DB_REF=2 CLIENT-BYPASS-OFF OTH (no DLS bypass)
+z7_net0 0xfffffe090e2ce140 SW LINK|FANOUT_PROTO|DLS_BYPASS|CLIENT_POLL|
+        MSGLEN  MEOI PROTOCOLS FASTPATH DISABLE?        SOFTRING
+        86      L4   TCP/IP6   CLIENT-BYPASS-OFF        OTH (no DLS bypass)
+z7_net0 0xfffffe090e2ce140 SW LINK|FANOUT_PROTO|DLS_BYPASS|CLIENT_POLL|
+        MSGLEN  MEOI PROTOCOLS FASTPATH DISABLE?        SOFTRING
+        86      L4   TCP/IP6   CLIENT-BYPASS-OFF        OTH (no DLS bypass)
+----
+
+The fastpath has been disabled due to "CLIENT-BYPASS-OFF" and delivered to the
+OTH softring for DLS processing. The CLIENT-BYPASS-OFF refers to
+`MCIS_RX_BYPASS_DISABLE`, which is set by `mac_rx_bypass_disable()`. This is
+only called during `dls_bind()`.
+
+So how does that relate to snoop? Did snoop call `dls_bind()`?
+
+----
+> ::walk dls_link_cache |::printf "0x%p %s 0x%p 0x%p\n" dls_link_t . dl_name dl_mch dl_str_hash
+0xfffffe08f5391848 vnic1027 0xfffffe08f0f7c088 0xfffffe090b48c340
+0xfffffe08f5391b08 vnic1008 0xfffffe08f0f7cb88 0xfffffe090b8dd700
+0xfffffe08f5391c68 vnic1000 0xfffffe08f0f7d108 0xfffffe08f3728400
+0xfffffe08f5391dc8 rge0 0xfffffe08f0f7d688 0xfffffe08f12dec40
+>
+> 0xfffffe090b48c340::modhash -e
+            ADDR              VAL              KEY
+fffffe08f8420cb0 fffffe090cebbf18                0
+fffffe08f84209e0 fffffe09100c7da0          86dd000
+fffffe08f8420998 fffffe091dc3caa8           806000
+fffffe08f17063e8 fffffe091dc87330           800000
+>
+> 0xfffffe090b8dd700::modhash -e
+            ADDR              VAL              KEY
+fffffe08f5395540 fffffe091dc08cf8                0
+fffffe08f5395a68 fffffe090bc49088          86dd000
+fffffe08f5395b88 fffffe090bea77c0           806000
+fffffe08f5395798 fffffe090d33ca80           800000
+----
+
+Above are the DLS stream hash tables. Notice that both tables now have an entry
+for an SAP of 0. That wasn't there before snoop. That is a non-IP SAP. When DLS
+is told to bind to a non-IP SAP it disables DLS bypass as seen in the `dls_bind()`
+code.
+
+----
+	/*
+	 * Now bind the dld_str_t by adding it into the hash table in the
+	 * dls_link_t.
+	 */
+	dls_link_add(dsp->ds_dlp, dls_sap, dsp);
+	if (dsp->ds_nonip && dsp->ds_dlp->dl_nonip_cnt++ == 0)
+		mac_rx_bypass_disable(dsp->ds_mch);
+----
+
+This can be verified by walking the DLD stream entries.
+
+----
+> ::walk dld_str_cache |::printf "0x%p 0x%p 0x%x %d %u\n" dld_str_t . ds_mch ds_sap ds_nonip ds_dlp->dl_nonip_cnt
+0xfffffe08f8286268 0xfffffe08f0f7c088 0x86dd 0 1
+0xfffffe08f8286398 0xfffffe08f0f7cb88 0x86dd 0 1
+0xfffffe08f82864c8 0xfffffe08f0f7c088 0x0 1 1
+0xfffffe08f82865f8 0xfffffe08f0f7c088 0x806 0 1
+0xfffffe08f8286728 0xfffffe08f0f7cb88 0x806 0 1
+0xfffffe08f8286858 0xfffffe08f0f7cb88 0x800 0 1
+0xfffffe08f8286988 0xfffffe08f0f7d688 0x88cc 1 1
+0xfffffe08f8286d18 0xfffffe08f0f7d688 0x806 0 1
+0xfffffe08f8286e48 0xfffffe08f0f7d688 0x800 0 1
+0xfffffe091e503860 0xfffffe08f0f7c088 0x800 0 1
+0xfffffe091e503990 0xfffffe08f0f7cb88 0x0 1 1
+----
+
+And that's why snoop "fixes" the problem.
+
+== 3. Closing
+
+Dan spun up a new PI with the changes I recommended: `20251028T150340Z`
+<<danmcd-17340>>. I was able to send TCP/UDP IPv6 traffic between the zones
+without issue. I also used mdb to verify the SRS/softrings were setup correctly:
+
+----
+> ::mac_srs -r
+                                                            MBLK        Q  SR
+            ADDR LINK_NAME            STATE    TYPE          CNT    BYTES CNT
+fffffe08f86c1040 rge0                 24000002 00003011        0        0   5
+fffffe08f86a77c0 z1_net0              24000002 00003011        0        0   5
+fffffe08f86aa780 z2_net0              24000002 00003011        0        0   5
+
+> ::walk mac_soft_ring_cache |::printf "0x%p %-8s %-40s %a\n" mac_soft_ring_t . s_ring_mcip->mci_name s_ring_name s_ring_rx_func ! grep net0
+0xfffffe08f8691040 z2_net0  mac_oth_soft_ring_0_fffffe08f86aa780     mac_rx_deliver
+0xfffffe08f86911c0 z2_net0  mac_udp6_soft_ring_0_fffffe08f86aa780    ip_input_v6
+0xfffffe08f8691340 z2_net0  mac_tcp6_soft_ring_0_fffffe08f86aa780    ip_input_v6
+0xfffffe08f86914c0 z2_net0  mac_udp_soft_ring_0_fffffe08f86aa780     ip_input
+0xfffffe08f8691640 z2_net0  mac_tcp_soft_ring_0_fffffe08f86aa780     ip_input
+0xfffffe090bcc4800 z1_net0  mac_oth_soft_ring_0_fffffe08f86a77c0     mac_rx_deliver
+0xfffffe090bcc4980 z1_net0  mac_udp6_soft_ring_0_fffffe08f86a77c0    ip_input_v6
+0xfffffe090bcc4b00 z1_net0  mac_tcp6_soft_ring_0_fffffe08f86a77c0    ip_input_v6
+0xfffffe090bcc4c80 z1_net0  mac_udp_soft_ring_0_fffffe08f86a77c0     ip_input
+0xfffffe090bcc4e00 z1_net0  mac_tcp_soft_ring_0_fffffe08f86a77c0     ip_input
+----
+
+== 4. Addenda
+
+=== 4.1 Addendum A: What is an etherstub?
+
+Until I worked on this issue I've never really looked at how an etherstub works;
+it turns out it's really simple.
+
+Any etherstub is simply a VNIC with no "anchor". The same code is executed to
+create an etherstub that is executed to create a VNIC, whith the exception that
+it's `dladm_vnic_attr_t.va_link_id` is set to `DATALINK_INVALID_LINKID` which
+tells libdladm to set the `VNIC_IOC_CREATE_ANCHOR` flag.
+
+----
+i_dladm_vnic_create_sys():
+	if (attr->va_link_id == DATALINK_INVALID_LINKID)
+		ioc.vc_flags |= VNIC_IOC_CREATE_ANCHOR;
+
+	rc = ioctl(dladm_dld_fd(handle), VNIC_IOC_CREATE, &ioc);
+----
+
+So instead of having another link to "anchor" it, it *is* the anchor.
+
+The idea is that an etherstub acts as an anchor for other VNICs so that they can
+make use of the simple L2 switch built into mac (that I typically call
+"mac-loopback"). This allows switching between all clients on the *same* anchor.
+
+So the next question might be, what capabilities are advertised? In the usual
+case of a VNIC the capabilities advertised come from the underlying link
+(anchor), but in this case the etherstub *is* the anchor. Etherstub's don't
+advertise capabilities, which can be seen below where I examine the vnic_t of an
+etherstub.
+
+----
+> ::walk mac_impl_cache |::printf "0x%p %s\n" mac_impl_t . mi_name
+0xfffffeb1ccc2f010 cxgbe0
+0xfffffeb1ccc33008 cxgbe1
+0xfffffeb1d18be000 ixgbe1
+0xfffffeb1d18c2040 i40e1
+0xfffffeb1d18c6038 i40e2
+0xfffffeb1d3572030 vnic1354
+0xfffffeb1d3576028 ixgbe0
+> 0xfffffeb1d3572030::print mac_impl_t mi_driver|::print -t vnic_t
+vnic_t {
+    datalink_id_t vn_id = 0x124
+    unsigned int:1 vn_enabled :1 = 0x1
+    unsigned int:31 vn_pad_to_bit_31 :31 = 0
+    mac_handle_t vn_mh = 0xfffffeb1d3572030
+    mac_handle_t vn_lower_mh = 0
+    uint_t vn_nhandles = 0
+    mac_client_handle_t [32] vn_mc_handles = [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+    mac_unicast_handle_t [32] vn_mu_handles = [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+    uint32_t vn_margin = 0x4
+    int vn_slot_id = 0
+    vnic_mac_addr_type_t vn_addr_type = 0 (VNIC_MAC_ADDR_TYPE_FIXED)
+    uint8_t [20] vn_addr = [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ]
+    size_t vn_addr_len = 0
+    uint16_t vn_vid = 0
+    vrid_t vn_vrid = 0
+    int vn_af = 0
+    boolean_t vn_force = 0 (0)
+    datalink_id_t vn_link_id = 0
+    mac_notify_handle_t vn_mnh = 0
+    uint32_t vn_hcksum_txflags = 0
+    mac_capab_lso_t vn_cap_lso = {
+        t_uscalar_t lso_flags = 0
+        lso_basic_tcp_ipv4_t lso_basic_tcp_ipv4 = {
+            t_uscalar_t lso_max = 0
+        }
+        lso_basic_tcp_ipv6_t lso_basic_tcp_ipv6 = {
+            t_uscalar_t lso_max = 0
+        }
+    }
+    uint32_t vn_mtu = 0x2328
+    link_state_t vn_ls = 1 (LINK_STATE_UP)
+}
+----
+
+=== 4.2 Addendum B: snoop and SAP 0
+
+Why does snoop cause SAP 0 to be bound? I thought snoop tapped into the network
+via the mac promisc hooks?
+
+I started by running a trace on `dls_bind()`.
+
+----
+[root@sector1 ~]# dtrace -qn 'dls_bind:entry { printf("%s dld_str_t=0x%p SAP=0x%x\n", probefunc, args[0], args[1]); ustack(); stack(); }'
+dls_bind dld_str_t=0xfffffe08f8286138 SAP=0x0
+
+
+              dld`proto_bind_req+0xfa
+              dld`dld_proto+0x135
+              dld`dld_wput_nondata_task+0x79
+              genunix`taskq_d_svc_bucket+0x94
+              genunix`taskq_d_thread+0xb7
+              unix`thread_start+0xb
+----
+
+This is a dispatch mechanism for DLD non-data requests. It serializes all
+requests per dld_str_t and executes them in a taskq to make sure they always
+happen in kernel context.
+
+----
+/*
+ * All control operations are serialized on the 'dsp' and are also funneled
+ * through a taskq mechanism to ensure that subsequent processing has kernel
+ * context and can safely use cv_wait.
+ *
+ * Mechanisms to handle taskq dispatch failures
+ *
+ * The only way to be sure that taskq dispatch does not fail is to either
+ * specify TQ_SLEEP or to use a static taskq and prepopulate it with
+ * some number of entries and make sure that the number of outstanding requests
+ * are less than that number. We can't use TQ_SLEEP since we don't know the
+ * context. Nor can we bound the total number of 'dsp' end points. So we are
+ * unable to use either of the above schemes, and are forced to deal with
+ * taskq dispatch failures. Note that even dynamic taskq could fail in
+ * dispatch if TQ_NOSLEEP is specified, since this flag is translated
+ * eventually to KM_NOSLEEP and kmem allocations could fail in the taskq
+ * framework.
+ *
+ * We maintain a queue of 'dsp's that encountered taskq dispatch failure.
+ * We also have a single global thread to retry the taskq dispatch. This
+ * thread loops in 'dld_taskq_dispatch' and retries the taskq dispatch, but
+ * uses TQ_SLEEP to ensure eventual success of the dispatch operation.
+ */
+static void
+dld_wput_nondata(dld_str_t *dsp, mblk_t *mp)
+----
+
+Here are the calls when starting snoop.
+
+----
+[root@sector1 ~]# dtrace -qn 'dls_bind:entry { printf("%s dld_str_t=0x%p SAP=0x%x\n", probefunc, args[0], args[1]); ustack(); stack(); } dld_wput_nondata:entry { printf("%s\n", probefunc); ustack(); stack(); }'
+dld_wput_nondata
+
+              libc.so.1`__putmsg+0x7
+              libdlpi.so.1`i_dlpi_strputmsg+0x58
+              libdlpi.so.1`i_dlpi_msg_common+0x34
+              libdlpi.so.1`dlpi_info+0x152
+              libdlpi.so.1`i_dlpi_checkstyle+0x35
+              libdlpi.so.1`i_dlpi_style1_open+0x73
+              libdlpi.so.1`dlpi_open_zone+0x1cf
+              snoop`open_datalink+0x12d
+              snoop`main+0x926
+              snoop`_start_crt+0x9a
+              snoop`_start+0x1a
+
+              dld`dld_wput+0x108
+              unix`putnext+0x2d5
+              genunix`strput+0x2a4
+              genunix`strputmsg+0x2ee
+              genunix`msgio32+0x1b8
+              genunix`putmsg32+0x64
+              unix`sys_syscall32+0x138
+dld_wput_nondata
+
+              libc.so.1`__putmsg+0x7
+              libdlpi.so.1`i_dlpi_strputmsg+0x58
+              libdlpi.so.1`i_dlpi_msg_common+0x34
+              libdlpi.so.1`i_dlpi_passive+0x99
+              libdlpi.so.1`dlpi_open_zone+0x25e
+              snoop`open_datalink+0x12d
+              snoop`main+0x926
+              snoop`_start_crt+0x9a
+              snoop`_start+0x1a
+
+              dld`dld_wput+0x108
+              unix`putnext+0x2d5
+              genunix`strput+0x35f
+              genunix`strputmsg+0x2ee
+              genunix`msgio32+0x1b8
+              genunix`putmsg32+0x64
+              unix`sys_syscall32+0x138
+dld_wput_nondata
+
+              libc.so.1`ioctl+0x7
+              snoop`open_datalink+0x12d
+              snoop`main+0x926
+              snoop`_start_crt+0x9a
+              snoop`_start+0x1a
+
+              dld`dld_wput+0x108
+              unix`putnext+0x2d5
+              genunix`strdoioctl+0x404
+              genunix`strioctl+0x2726
+              specfs`spec_ioctl+0x44
+              genunix`fop_ioctl+0x40
+              genunix`ioctl+0x144
+              unix`sys_syscall32+0x138
+dld_wput_nondata
+
+              libc.so.1`__putmsg+0x7
+              libdlpi.so.1`i_dlpi_strputmsg+0x58
+              libdlpi.so.1`i_dlpi_msg_common+0x34
+              libdlpi.so.1`dlpi_info+0x152
+              snoop`open_datalink+0x14a
+              snoop`main+0x926
+              snoop`_start_crt+0x9a
+              snoop`_start+0x1a
+
+              dld`dld_wput+0x108
+              unix`putnext+0x2d5
+              genunix`strput+0x2a4
+              genunix`strputmsg+0x2ee
+              genunix`msgio32+0x1b8
+              genunix`putmsg32+0x64
+              unix`sys_syscall32+0x138
+dld_wput_nondata
+
+              libc.so.1`__putmsg+0x7
+              libdlpi.so.1`i_dlpi_strputmsg+0x58
+              libdlpi.so.1`i_dlpi_msg_common+0x34
+              libdlpi.so.1`dlpi_bind+0xd5
+              snoop`init_datalink+0x19
+              snoop`main+0xc3d
+              snoop`_start_crt+0x9a
+              snoop`_start+0x1a
+
+              dld`dld_wput+0x108
+              unix`putnext+0x2d5
+              genunix`strput+0x35f
+              genunix`strputmsg+0x2ee
+              genunix`msgio32+0x1b8
+              genunix`putmsg32+0x64
+              unix`sys_syscall32+0x138
+dls_bind dld_str_t=0xfffffe08f8286138 SAP=0x0
+
+
+              dld`proto_bind_req+0xfa
+              dld`dld_proto+0x135
+              dld`dld_wput_nondata_task+0x79
+              genunix`taskq_d_svc_bucket+0x94
+              genunix`taskq_d_thread+0xb7
+              unix`thread_start+0xb
+dld_wput_nondata
+
+              libc.so.1`__putmsg+0x7
+              libdlpi.so.1`i_dlpi_strputmsg+0x58
+              libdlpi.so.1`i_dlpi_msg_common+0x34
+              libdlpi.so.1`i_dlpi_promisc+0xaf
+              libdlpi.so.1`dlpi_promiscon+0x13
+              snoop`init_datalink+0x7d
+              snoop`main+0xc3d
+              snoop`_start_crt+0x9a
+              snoop`_start+0x1a
+
+              dld`dld_wput+0x108
+              unix`putnext+0x2d5
+              genunix`strput+0x35f
+              genunix`strputmsg+0x2ee
+              genunix`msgio32+0x1b8
+              genunix`putmsg32+0x64
+              unix`sys_syscall32+0x138
+dld_wput_nondata
+
+              libc.so.1`__putmsg+0x7
+              libdlpi.so.1`i_dlpi_strputmsg+0x58
+              libdlpi.so.1`i_dlpi_msg_common+0x34
+              libdlpi.so.1`i_dlpi_promisc+0xaf
+              libdlpi.so.1`dlpi_promiscon+0x13
+              snoop`init_datalink+0xb4
+              snoop`main+0xc3d
+              snoop`_start_crt+0x9a
+              snoop`_start+0x1a
+
+              dld`dld_wput+0x108
+              unix`putnext+0x2d5
+              genunix`strput+0x35f
+              genunix`strputmsg+0x2ee
+              genunix`msgio32+0x1b8
+              genunix`putmsg32+0x64
+              unix`sys_syscall32+0x138
+dld_wput_nondata
+
+              libc.so.1`ioctl+0x7
+              snoop`main+0xc3d
+              snoop`_start_crt+0x9a
+              snoop`_start+0x1a
+
+              dld`dld_wput+0x108
+              unix`putnext+0x2d5
+              bufmod`sbioctl+0x3d3
+              bufmod`sbwput+0x78
+              unix`putnext+0x2d5
+              genunix`strdoioctl+0x404
+              genunix`strioctl+0x2311
+              specfs`spec_ioctl+0x44
+              genunix`fop_ioctl+0x40
+              genunix`ioctl+0x144
+              unix`sys_syscall32+0x138
+^C
+----
+
+The `snoop`init_datalink()` looks interesting.
+
+.`init_datalink()`
+----
+	retv = dlpi_bind(dh, DLPI_ANY_SAP, NULL);
+----
+
+Okay, so it uses `DLPI_ANY_SAP`. I’m not really sure how this is different from
+`DLS_PROMISC_SAP`/`DLS_SAP_PROMISC`.
+
+----
+$ csgrep DLPI_ANY_SAP
+Searching for symbol DLPI_ANY_SAP
+lib/libdlpi/common/libdlpi.h:51: (<global>) #define DLPI_ANY_SAP (uint_t)-1
+cmd/bhyve/common/net_backend_dlpi.c:118: (be_dlpi_init) if ((ret = dlpi_bind(priv->bdp_dhp, DLPI_ANY_SAP, NULL)) !=
+cmd/cmd-inet/usr.lib/wpad/l2_packet.c:31: (link_init) retval = dlpi_bind(l2->dh, DLPI_ANY_SAP, NULL);
+cmd/cmd-inet/usr.sbin/snoop/snoop_capture.c:186: (init_datalink) retv = dlpi_bind(dh, DLPI_ANY_SAP, NULL);
+lib/libdhcpagent/common/dhcp_stable.c:144: (make_stable_duid) dlpi_bind(dh, DLPI_ANY_SAP, NULL) == DLPI_SUCCESS &&
+lib/libdhcputil/common/dhcp_inittab.c:511: (get_mac_addr) if (dlpi_bind(dh, DLPI_ANY_SAP, NULL) !=
+lib/libdlpi/common/libdlpi.c:476: (dlpi_bind) if (sap == DLPI_ANY_SAP)
+lib/libdlpi/common/libdlpi.c:500: (dlpi_bind) } else if (sap != DLPI_ANY_SAP && bindackp->dl_sap != sap) {
+----
+
+So it’s value is -1, which must be getting converted to 0 at some point.
+
+.`dlpi_bind()`
+----
+	/*
+	 * If 'sap' is DLPI_ANY_SAP, bind to SAP 2 on token ring, else 0 on
+	 * other interface types (SAP 0 has special significance on token ring).
+	 */
+	if (sap == DLPI_ANY_SAP)
+		bindreqp->dl_sap = ((dip->dli_mactype == DL_TPR) ? 2 : 0);
+	else
+		bindreqp->dl_sap = sap;
+----
+
+Stepping over the dead corpse that is TR for a moment, I can see that
+`DLPI_ANY_SAP` is converted to 0. Which makes you wonder why it isn't just 0 to
+being with? Probably because TR treats 0 specially and we needed a sentinel
+value.
+
+This brings up another question for me though: what good does binding to SAP 0
+really do?
+
+I thought snoop gets all its data from the mac promisc callbacks. For something
+to match SAP 0 in DLS it would need to be non-ethernet traffic or 802.3 framing.
+If all traffic is captured by the mac promisc callbacks, wouldn't this result in
+*duplicate* delivery to snoop? This feels like some older method of promisc.
+
+One way to explore this might be to run snoop on an IP tunnel?
+
+=== 4.3 Addendum C: How did these checks get here?
+
+How did these checks make it into illumos-joyent in the first place? Here is the
+breakdown which I originally wrote to Dan on the  smartos-discuss list.
+
+If you look at the *current* version of `dld_proto.c` in illumos-joyent you'll
+notice that there are redundant checks for `ETHERTYPE_IPV6` for both `DIRECT`
+and `POLL` capabs <<dld_proto.c>>. It looks like something got messed up in a
+merge commit at some point.
+
+The first checks were introduced by Cody Mello in late 2017.
+
+----
+commit 12a82dd4a058eb86f2b6b075bde38b01424f8f30
+Author: Cody Peter Mello <cody.mello@joyent.com>
+Date:   Wed Dec 6 01:28:51 2017 +0000
+
+    OS-4683 Using the allowed-ips property prevents using dynamic addresses
+    Reviewed by: Robert Mustacchi <rm@joyent.com>
+    Reviewed by: Dan McDonald <danmcd@joyent.com>
+    Approved by: Dan McDonald <danmcd@joyent.com>
+----
+
+Then the checks were lost in this commit which is a re-merge (?) of my
+work that I originally did in illumos-joyent in 2017, but was upstreamed
+to gate in 2020.
+
+----
+commit 84de666edc7f7d835057ae4807a387447c086bcf
+Author: Ryan Zezeski <ryan@zinascii.com>
+Date:   Tue Jan 21 12:21:56 2020 -0700
+
+    11490 SRS ring polling disabled for VLANs
+    11491 Want DLS bypass for VLAN traffic
+    11492 add VLVF bypass to ixgbe core
+    2869 duplicate packets with vnics over aggrs
+    11489 DLS stat delete and aggr kstat can deadlock
+    Portions contributed by: Theo Schlossnagle <jesus@omniti.com>
+    Reviewed by: Patrick Mooney <patrick.mooney@joyent.com>
+    Reviewed by: Robert Mustacchi <rm@joyent.com>
+    Reviewed by: Dan McDonald <danmcd@joyent.com>
+    Reviewed by: Paul Winder <paul@winders.demon.co.uk>
+    Approved by: Gordon Ross <gordon.w.ross@gmail.com>
+----
+
+Here's the original commit which predates Cody's work:
+
+----
+commit 1a34bceaa14b4cf3a9cf90aa9c4dae5eb003d9d7
+Author: Ryan Zezeski <rpz@joyent.com>
+Date:   Fri Sep 15 10:45:38 2017 -0600
+
+    OS-5326 SRS ring polling disabled for VLANs
+    OS-6244 Want DLS bypass for VLAN traffic
+    OS-6593 add VLVF bypass to ixgbe core
+    Reviewed by: Patrick Mooney <patrick.mooney@joyent.com>
+    Reviewed by: Robert Mustacchi <rm@joyent.com>
+    Reviewed by: Dan McDonald <danmcd@joyent.com>
+    Approved by: Patrick Mooney <patrick.mooney@joyent.com>
+----
+
+However, this all becomes moot with the introduction of <<illumos-12466>>
+Enable IPv6 TSO Support for vioif.
+
+----
+commit 62366fbbe8edca853fee6c14327d822239ba914f
+Author: Robert Mustacchi <rm@fingolfin.org>
+Date:   Wed Apr 1 15:30:20 2020 +0000
+
+    12466 Enable IPv6 TSO Support for vioif
+    Reviewed by: Jason King <jason.brian.king@gmail.com>
+    Reviewed by: Hans Rosenfeld <rosenfeld@grumpf.hope-2000.org>
+    Reviewed by: Paul Winder <paul@winders.demon.co.uk>
+    Approved by: Garrett D'Amore <garrett@damore.org>
+----
+
+In this change Robert added DLD LSO support for IPv6 and then added `ENOTSUP`
+checks to `dld_capab()` for `POLL` + `DIRECT` (whereas Cody had placed them in
+the specific capab functions). So at this point the checks were back, just in a
+different place.
+
+Then came along this merge commit.
+
+----
+commit 6b564a7014af2d4d9f000ed39a4fed77fd5245e0 (origin/release-20200409)
+Merge: 4fc8237742 62366fbbe8
+Author: Jerry Jelinek <jerry.jelinek@joyent.com>
+Date:   Wed Apr 8 11:41:12 2020 +0000
+
+            [illumos-gate merge]
+
+    commit 62366fbbe8edca853fee6c14327d822239ba914f
+        12466 Enable IPv6 TSO Support for vioif
+    commit d240edaf609c558d5a1f981b09a577823b54fae2
+        12465 vioif needs length for tso checksum
+    commit 425251fd07ab465313fb50dea0f1ac795be10e05
+        9059 Simplify SMAP relocations with krtld
+    commit 28e0ac9c914344194ef919b0271895d33f83d396
+        12433 efcode: NULL pointer errors
+    commit 31aa620247ae407b2bee2dccd71693d1938f54d6
+        12452 Want support for AMD Zen 2 CPC Events
+
+            Conflicts:
+            usr/src/uts/i86pc/os/machdep.c
+            usr/src/uts/common/io/dld/dld_proto.c
+            usr/src/uts/common/inet/ip/ip_if.c
+----
+
+It restablished all of Cody's original three checks while also leaving
+Robert's in place. Which means it unnecessairly blocked DLD LSO for
+IPv6, and resulted in redundant checks for `POLL` + `DIRECT`.
+
+Finally, we come to today and the merge of illumos#17340. It removes
+*Robert's* checks, but leaves Cody's in place as they were never in gate
+to being with.
+
+[bibliography]
+== 5. References
+
+* [[[danmcd-17340]]] https://kebe.com/~danmcd/work/17340/
+* [[[dld_proto.c]]] https://github.com/TritonDataCenter/illumos-joyent/blob/5ee593bd812cc82b8f4543e4f6ccd69af0faa819/usr/src/uts/common/io/dld/dld_proto.c
+* [[[illumos-12466,illumos#12466]]] https://www.illumos.org/issues/12466
+* [[[illumos-17340,illumos#17340]]] https://www.illumos.org/issues/17340
+* [[[smartos-discuss]]] https://smartos.topicbox.com/groups/smartos-discuss/Tf6a43ecb0a0b421f
