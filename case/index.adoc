@@ -1,5 +1,9 @@
-[cols="10h,~"]
+[cols="10h,10,~"]
 |===
 |xref:0001/report.adoc[0001]
+|CLOSED
 |illumos#17340 IPv6 fast path DOA on SmartOS
+|xref:0002/log.adoc[0002]
+|OPEN
+|dblk checksum data goes missing
 |===

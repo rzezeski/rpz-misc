@@ -1,0 +1,229 @@
+= dblk checksum data go missing
+:revdate: November 5, 2025
+:revremark: CASE-0002 [OPEN]
+
+== 11.05.25
+
+I took over https://www.illumos.org/issues/17340[illumos#17340 Want IPv6 Fast
+Path] and made some changes. While running the `mac_ktest` suite on the new bits
+I hit a panic.
+
+----
+root@midgar:~# /opt/os-tests/tests/mac/mac_ktest 
+/opt/os-tests/tests/mac/mac_cksum -4 /opt/os-tests/tests/mac/data/ipv4_bad_proto.snoop 
+   0    PASS    (len: 102)
+/opt/os-tests/tests/mac/mac_cksum -4 -b 2 /opt/os-tests/tests/mac/data/ipv4_bad_proto.snoop 
+   0    PASS    (len: 102)
+/opt/os-tests/tests/mac/mac_cksum -4 -e /opt/os-tests/tests/mac/data/ipv4_bad_proto.snoop 
+   0    PASS    (len: 102)
+/opt/os-tests/tests/mac/mac_cksum -4 -s 20 /opt/os-tests/tests/mac/data/ipv4_bad_proto.snoop 
+   0    PASS    (len: 102)
+/opt/os-tests/tests/mac/mac_cksum -4 -e -s 8 /opt/os-tests/tests/mac/data/ipv4_bad_proto.snoop 
+   0    PASS    (len: 102)
+/opt/os-tests/tests/mac/mac_cksum -4 -p /opt/os-tests/tests/mac/data/ipv4_icmp.snoop 
+   0    PASS    (len: 98)
+/opt/os-tests/tests/mac/mac_cksum -4 -p -b 2 /opt/os-tests/tests/mac/data/ipv4_icmp.snoop 
+   0    PASS    (len: 98)
+/opt/os-tests/tests/mac/mac_cksum -4 -p -e /opt/os-tests/tests/mac/data/ipv4_icmp.snoop 
+Shared connection to 192.168.1.20 closed.
+----
+
+.dump analysis
+----
+> ::status
+debugging crash dump /mnt/var/crash/vmcore.5 (64-bit) from midgar
+operating system: 5.11 illumos-17340-dev-0-g1987497274 (i86pc)
+build version: gfx-drm - heads/master-0-g77f745e
+
+image uuid: 02b99e9d-5b76-4d0c-95d1-7d175f7e8665
+panic message: assertion failed: end > start (0x84f42940 > 0xc6157e70), file: ../../common/io/mac/mac_util.c, line: 418
+dump content: kernel pages and pages from PID -1
+
+> $C
+fffffe00f48ed3a0 vpanic()
+fffffe00f48ed430 ~assfail3+0xd0()
+fffffe00f48ed4c0 mac_sw_cksum+0x69c(fffffeb4c6039ae0, 3)
+fffffe00f48ed560 mac_hw_emul+0x1cf(fffffe00f48ed5b8, 0, 0, 3)
+fffffe00f48ed620 mac_hw_emul_test+0x157(fffffe00f48ed6c8, fffffe00f48ed630)
+fffffe00f48ed6b0 mac_sw_cksum_test+0x39(fffffe00f48ed6c8)
+fffffe00f48ed730 ktest_run_test+0x78(fffffeb5abf27668, fffffeb40a843e40, 100, fffffe00f48edc10)
+fffffe00f48efc50 ktest_ioctl_run_test+0xd3(fffffc7fffdef050, 202001)
+fffffe00f48efcb0 ktest_ioctl+0x83(10600000000, 6b7401, fffffc7fffdef050, 202001, fffffeb4015fec38, fffffe00f48efe08)
+fffffe00f48efcf0 cdev_ioctl+0x3f(10600000000, 6b7401, fffffc7fffdef050, 202001, fffffeb4015fec38, fffffe00f48efe08)
+fffffe00f48efd40 spec_ioctl+0x55(fffffeb4c5fe8700, 6b7401, fffffc7fffdef050, 202001, fffffeb4015fec38, fffffe00f48efe08)
+fffffe00f48efdd0 fop_ioctl+0x40(fffffeb4c5fe8700, 6b7401, fffffc7fffdef050, 202001, fffffeb4015fec38, fffffe00f48efe08)
+fffffe00f48efef0 ioctl+0x144(4, 6b7401, fffffc7fffdef050)
+fffffe00f48eff00 sys_syscall+0x283()
+
+> fffffe00f48ed630::print -t emul_test_params_t
+emul_test_params_t {
+    mblk_t *etp_mp = 0xfffffeb4c6039ae0
+    uchar_t *etp_raw = 0xfffffeb5acc8bf78
+    uint_t etp_raw_sz = 0x62
+    uchar_t *etp_outputs = 0
+    uint_t etp_outputs_sz = 0
+    boolean_t etp_do_partial = 0x1 (B_TRUE)
+    boolean_t etp_do_full = 0 (0)
+    boolean_t etp_do_ipv4 = 0x1 (B_TRUE)
+    boolean_t etp_do_lso = 0 (0)
+    uint_t etp_mss = 0
+    uint_t [8] etp_splits = [ 0xe, 0, 0, 0, 0, 0, 0, 0 ]
+}
+> 0xfffffeb4c6039ae0::mblk
+            ADDR FL TYPE    LEN   BLEN              RPTR             DBLK
+fffffeb4c6039ae0 0  data    14    16    fffffeb37730b970 fffffeb37730b900
+
+> 0xfffffeb4c6039ae0::list b_cont |::mblk
+Usage: [address]::list type member [variable]
+> 0xfffffeb4c6039ae0::list mblk_t b_cont |::mblk
+            ADDR FL TYPE    LEN   BLEN              RPTR             DBLK
+fffffeb4c6039ae0 0  data    14    16    fffffeb37730b970 fffffeb37730b900
+fffffeb3120f7f60 0  data    84    144   fffffeb3fd4e18f0 fffffeb3fd4e1880
+----
+
+This was caused by my change to the ktest.
+
+.diff
+----
+@@ -496,7 +509,7 @@ mac_hw_emul_test(ktest_ctx_hdl_t *ctx, emul_test_params_t *etp)
+                        hck_end -= meoi.meoi_l2hlen;
+                }
+                /* Set hcksum information on all mblks in chain */
+-               for (mblk_t *cmp = mp; cmp != NULL; cmp = cmp->b_cont) {
++               for (mblk_t *cmp = mp; cmp != NULL; cmp = cmp->b_next) {
+                        mac_hcksum_set(cmp, hck_start, hck_stuff, hck_end, 0,
+                            hck_flags & HCK_FLAGS);
+                        lso_info_set(cmp, etp->etp_mss,
+----
+
+The rule is that flags are only set on the head mblk/dblk of a packet. So when I
+saw code that was copying flags across `b_cont` I found it highly unusual. I
+figured this was just a typo, but it ended up causing this panic, so it must be
+a bit deeper than that.
+
+.panic site `mac_sw_cksum()`
+----
+	/* Calculate partial ULP checksum, if requested */
+	if (do_ulp_cksum && ulp_prefer_partial) {
+		uint32_t start, stuff, end, value;
+		mac_hcksum_get(mp, &start, &stuff, &end, &value, NULL);
+
+		ASSERT3S(end, >, start);
+----
+
+The panic happens here. There is gibberish in the `start`/`end` values and the
+assert trips. When performing ULP checksum these values needs to exist and make
+sense, but they don't. But why is this seemingly tied to the `b_cont => b_next`
+change I made in the ktest? The answer lies further up in the function.
+
+.lost flags
+----
+	/*
+	 * If the first mblk of this packet contains only the Ethernet header,
+	 * skip past it for now. Packets with their data contained in only a
+	 * single mblk can then use the fastpaths tuned to that possibility.
+	 */
+	mblk_t *skipped_hdr = NULL;
+	if (MBLKL(mp) == meoi.meoi_l2hlen) {
+		meoi.meoi_len -= meoi.meoi_l2hlen;
+		meoi.meoi_l2hlen = 0;
+		skipped_hdr = mp;
+		mp = mp->b_cont;
+
+		ASSERT(mp != NULL);
+	}
+----
+
+This section of code was added in
+https://www.illumos.org/issues/17282[illumos#17282 express mac_sw_cksum() in
+terms of MEOI]. Presumably the thinking was to avoid a `msgpullup()` if
+possible. However, there is a bug in this code: it fails to copy over the
+checksum data to the new head mblk. This bug was not caught by the test because
+it copied the checksum data across `b_cont` even though that is not how mac
+itself operates. When I changed this to use `b_next` it exposed the latent bug.
+
+----
+commit 1f8b8a0145321ca42ee324565958ceb82a14ee7a
+Author: Patrick Mooney <pmooney@pfmooney.com>
+Date:   Mon Feb 3 16:20:26 2025 +0000
+
+    17282 express mac_sw_cksum() in terms of MEOI
+    17317 mac_ether_offload_info() should recognize ICMP
+    17318 mac_sw_cksum() could support ICMP
+    Reviewed by: Kyle Simpson <kyle@oxide.computer>
+    Reviewed by: C Fraire <cfraire@me.com>
+    Reviewed by: Dan McDonald <danmcd@mnx.io>
+    Approved by: Robert Mustacchi <rm@fingolfin.org>
+----
+
+To hit this bug the packet must meet the following criteria:
+
+* consist of two or more mblk segments (`b_cont`),
+* where the first segment contains only the L2 header (`meoi_l2hlen`), and
+* the second segment contains at least the L3+L4 headers (`meoi_l3hlen +
+meoi_l4hlen`), and
+* `DB_REF == 1`
+
+In that case we end up performing checksum emulation on an mblk segment missing
+the checksum data.
+
+Towards the end of the function we reattach the `skipped_hdr`, if there is one.
+As part of this reattachment we clone the checksum data from the L3/L4 mblk to
+the L2 mblk. So in this case we do actually have checksum data in more than just
+the head mblk. Furthermore, the code references that this is done to match what
+is seen in `mac_add_vlan_tag()`, as consumers like IP discard the L2 mblk
+without copying the flags.
+
+Is this true?
+
+Two things I wonder:
+
+1. Does IP actually discard the head mblk without copying checksum data?
+2. If we do need to propogate checksum data to all header mblks (effectively
+   this should always be limited to the first two mblks), then should we perhaps
+   have a `mblk_strip_l2()` routine that centralizes the act of stipping the L2
+   data? Then, instead of copying the checksum data to both mblks "just in
+   case", we could have this routine copy over checksum data if the first mblk
+   is being removed.
+
+Also, I forget what `start`, `end` and `stuff` actually point to. Are they
+relative to the end of L2?
+
+Yes, it seems to be relative to start of IP header as consumers add L2 header
+length to it's value to find the start of the checksum data. So removing the L2
+header mblk does not change the value of start/end/stuff, but any consumer must
+be careful to know if its mblk contains the L2 header or not.
+
+It's definitely relative to start of IP header based on ip code.
+
+.`ip_input_cksum_v4()`
+----
+	if ((hck_flags & HCK_PARTIALCKSUM) &&
+	    (mp1 == NULL || mp1->b_cont == NULL) &&
+	    ip_hdr_length >= DB_CKSUMSTART(mp) &&
+	    ((len = ip_hdr_length - DB_CKSUMSTART(mp)) & 1) == 0) {
+		uint32_t	adj;
+		uchar_t		*cksum_start;
+
+		cksum = ip_input_cksum_pseudo_v4(ipha, ira);
+
+		cksum_start = ((uchar_t *)ipha + DB_CKSUMSTART(mp));
+----
+
+This looks to be an issue I introduced back in 2018 as part of the following
+illumos-joyent commit.
+
+----
+commit e6151003c8efce19988229b39ba3dbb5551dc6f1
+Author: Ryan Zezeski <rpz@joyent.com>
+Date:   Fri Oct 26 05:06:02 2018 -0600
+
+    OS-2340 vnics should support LSO
+    OS-6778 MAC loopback traffic should avoid cksum work
+    OS-6794 want LSO support in viona
+    OS-7319 dangling ref in mac_sw_cksum()
+    OS-7331 mac_sw_cksum() drops valid UDP traffic
+    Reviewed by: Patrick Mooney <patrick.mooney@joyent.com>
+    Reviewed by: Dan McDonald <danmcd@joyent.com>
+    Approved by: Patrick Mooney <patrick.mooney@joyent.com>
+----
