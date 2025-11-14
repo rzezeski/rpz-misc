@@ -581,7 +581,7 @@ function send_traffic
 	#
 	# Send some traffic to VNIC.
 	#
-	socat -T 10 -b 4096 STDIN \
+	socat -T 10 -b 4096 -u STDIN \
 	      ${proto}:[$recv_ip]:$port,bind=[$send_ip],connect-timeout=5 \
 	      < $src_file
 	if (($? != 0)); then

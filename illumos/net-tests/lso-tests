@@ -712,7 +712,7 @@ IP_SUBNET=192.168.66
 #
 # https://www.illumos.org/issues/12731
 #
-NO_TSO6=1
+NO_TSO6=${NO_TSO6:-0}
 TNAME=""
 
 while getopts ":ds:" opt
@@ -781,13 +781,16 @@ test_lso_ip4_vnic $send_nic $recv_nic
 test_lso_ip4_vnic_vlan $send_nic $recv_nic
 test_lso_ip4_mac_loopback $send_nic
 test_lso_ip4_mac_loopback_vlan $send_nic
+ 
+if (($NO_TSO6 == 1)); then
+	echo
+	echo "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+	echo "% The following tests will elide the LSO check until the   %"
+	echo "% mac sw LSO is updated to handle IPv6 -- for now these    %"
+	echo "% tests only verify that traffic is sent, not LSO.         %"
+	echo "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
+fi
 
-echo
-echo "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
-echo "% The following tests will elide the LSO check until the   %"
-echo "% mac sw LSO is updated to handle IPv6 -- for now these    %"
-echo "% tests only verify that traffic is sent, not LSO.         %"
-echo "%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%"
 test_lso_ip6_primary $send_nic $recv_nic
 test_lso_ip6_primary_vlan $send_nic $recv_nic
 test_lso_ip6_vnic $send_nic $recv_nic
