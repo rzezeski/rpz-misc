@@ -1,28 +1,22 @@
 #pragma D option quiet
+#pragma D option bufsize=64m
+#pragma D option dynvarsize=64m
 #pragma D option switchrate=500hz
 
 typedef enum {
-	STATE_EVENT_IQ_IDLE = 0,
+	STATE_IDLE = 0,
+
 	STATE_EVENT_IQ_PROC_ENTRIES,
 	STATE_EVENT_IQ_PROC_INTR_FWDS,
 
-	STATE_RX_IQ_IDLE,
-
-	/* STATE_RX_IQ_INTR_PROC, */
 	STATE_RX_IQ_INTR_ACT,
 
-	/* STATE_RX_IQ_POLL_PROC, */
 	STATE_RX_IQ_POLL_ACTIVE,
-
 	STATE_RX_IQ_POLL_ON,
 	STATE_RX_IQ_POLL_OFF,
 
-	STATE_TX_IDLE,
-
-	/* STATE_TX_SEND_IDLE, */
 	STATE_TX_SEND_PROC,
 
-	/* STATE_TX_RECY_IDLE, */
 	STATE_TX_RECY_CHECK,
 	STATE_TX_RECY_PROC,
 	STATE_TX_RECY_FREE,
@@ -34,16 +28,13 @@ typedef enum {
 	STATE_TCP_SND_QUEUE_FULL,
 	STATE_TCP_SND_QUEUE_CLEAR,
 
-	STATE_RX_SR_IDLE,
 	STATE_RX_SR_DRAIN,
 	STATE_RX_SR_PROC,
 	STATE_RX_SR_POLL,
 
-	STATE_TX_SR_IDLE,
 	STATE_TX_SR_DRAIN,
 	STATE_TX_SR_PROC,
 
-	STATE_RX_SRS_IDLE,
 	STATE_RX_SRS_PROC,
 	STATE_RX_SRS_DRAIN,
 	STATE_MAX,
@@ -65,13 +56,10 @@ BEGIN {
 	printf("\t\"states\": {\n");
 
 	/* TODO actually pick colors */
-	STATE_METADATA(STATE_EVENT_IQ_IDLE, "idle", "#3449EB");
+	STATE_METADATA(STATE_IDLE, "idle", "#BDBBBB");
 	STATE_METADATA(STATE_EVENT_IQ_PROC_ENTRIES, "proc_entries", "#EB4034");
 	STATE_METADATA(STATE_EVENT_IQ_PROC_INTR_FWDS, "proc_fwd",
 	    "#34EB77");
-
-	/* RPZ I should maybe make idle and rx-idle one state */
-	STATE_METADATA(STATE_RX_IQ_IDLE, "rx-idle", "#3449EB");
 
 	/* STATE_METADATA(STATE_RX_IQ_INTR_PROC, "intr", "#34EB77"); */
 	STATE_METADATA(STATE_RX_IQ_INTR_ACT, "intr-act", "#34EB77");
@@ -83,33 +71,26 @@ BEGIN {
 	STATE_METADATA(STATE_RX_IQ_POLL_ON, "poll-on", "#FA14F2");
 	STATE_METADATA(STATE_RX_IQ_POLL_OFF, "poll-off", "#750B72");
 
-	STATE_METADATA(STATE_TX_IDLE, "tx-idle", "#3449EB");
-
-	/* STATE_METADATA(STATE_TX_SEND_IDLE, "tx-send-idle", "#3449EB"); */
 	STATE_METADATA(STATE_TX_SEND_PROC, "tx-send-proc", "#E0800B");
 
-	/* STATE_METADATA(STATE_TX_RECY_IDLE, "tx-recy-idle", "#3449EB"); */
 	STATE_METADATA(STATE_TX_RECY_CHECK, "tx-recy-check", "#8EBD99");
 	STATE_METADATA(STATE_TX_RECY_PROC, "tx-recy-proc", "#10B537");
 	STATE_METADATA(STATE_TX_RECY_FREE, "tx-recy-free", "#024D14");
 
-	STATE_METADATA(STATE_IPERF_USER, "iperf-user", "#3449EB");
+	STATE_METADATA(STATE_IPERF_USER, "iperf-user", "#BDBBBB");
 	STATE_METADATA(STATE_IPERF_SEND, "iperf-send", "#9E19E6");
 	STATE_METADATA(STATE_IPERF_READ, "iperf-read", "#F005E8");
 
 	STATE_METADATA(STATE_TCP_SND_QUEUE_FULL, "tcp-snd-full", "#EB4034");
-	STATE_METADATA(STATE_TCP_SND_QUEUE_CLEAR, "tcp-snd-clear", "#3449EB");
+	STATE_METADATA(STATE_TCP_SND_QUEUE_CLEAR, "tcp-snd-clear", "#BDBBBB");
 
-	STATE_METADATA(STATE_RX_SR_IDLE, "rx-sr-idle", "#3449EB");
 	STATE_METADATA(STATE_RX_SR_DRAIN, "rx-sr-drain", "#19F7F4");
 	STATE_METADATA(STATE_RX_SR_PROC, "rx-sr-proc", "#9E19E6");
 	STATE_METADATA(STATE_RX_SR_POLL, "rx-sr-poll", "#024D14");
 
-	STATE_METADATA(STATE_TX_SR_IDLE, "tx-sr-idle", "#3449EB");
 	STATE_METADATA(STATE_TX_SR_DRAIN, "tx-sr-drain", "#19F7F4");
 	STATE_METADATA(STATE_TX_SR_PROC, "tx-sr-proc", "#9E19E6");
 
-	STATE_METADATA(STATE_RX_SRS_IDLE, "rx-srs-idle", "#3449EB");
 	STATE_METADATA(STATE_RX_SRS_DRAIN, "rx-srs-drain", "#19F7F4");
 	STATE_METADATA(STATE_RX_SRS_PROC, "rx-srs-proc", "#9E19E6");
 
@@ -138,7 +119,7 @@ t4_process_event_iq:entry
 
 t4_process_event_iq:return /self->event_iq/
 {
-	transition_event_iq(timestamp, self->event_iq, STATE_EVENT_IQ_IDLE);
+	transition_event_iq(timestamp, self->event_iq, STATE_IDLE);
 	self->event_iq = 0;
 }
 
@@ -191,7 +172,7 @@ t4_process_rx_iq:entry /arg1 > 0/
 t4_process_rx_iq:return /self->rii_rx_iq/
 {
 	transition_rx_iq_intr(timestamp, self->rii_name, self->rii_rx_iq,
-	    STATE_RX_IQ_IDLE);
+	    STATE_IDLE);
 
 	self->rii_name = 0;
 	self->rii_rx_iq = 0;
@@ -222,7 +203,7 @@ t4_process_rx_iq:entry /arg2 != NULL/
 t4_process_rx_iq:return /self->rip_rx_iq/
 {
 	transition_rx_iq_poll(timestamp, self->rip_name, self->rip_rx_iq,
-	    STATE_RX_IQ_IDLE);
+	    STATE_IDLE);
 
 	self->rip_name = 0;
 	self->rip_rx_iq = 0;
@@ -289,7 +270,7 @@ t4_eth_tx:entry
 t4_eth_tx:return /self->ts_txq/
 {
 	transition_tx_send(timestamp, self->ts_name, self->ts_txq,
-	    STATE_TX_IDLE);
+	    STATE_IDLE);
 
 	self->ts_txq = 0;
 	self->ts_name = 0;
@@ -350,7 +331,7 @@ t4_tx_reclaim_credits:return /self->recy_track/
 t4_sge_egr_update:return /self->recy_track/
 {
 	transition_tx_recy(timestamp, self->recy_name, self->recy_txq,
-	    STATE_TX_IDLE);
+	    STATE_IDLE);
 
 	self->recy_track = 0;
 	self->recy_txq = 0;
@@ -495,7 +476,7 @@ mac_rx_soft_ring_drain:entry
 mac_rx_soft_ring_drain:return /self->rsd_sr/
 {
 	transition_rx_sr_drain(timestamp, self->rsd_name, self->rsd_sr,
-	    STATE_RX_SR_IDLE);
+	    STATE_IDLE);
 
 	self->rsd_sr = 0;
 	self->rsd_name = 0;
@@ -528,7 +509,7 @@ mac_rx_soft_ring_process:entry
 mac_rx_soft_ring_process:return /self->rsp_sr/
 {
 	transition_rx_sr_proc(timestamp, self->rsp_name, self->rsp_sr,
-	    STATE_RX_SR_IDLE);
+	    STATE_IDLE);
 
 	self->rsp_sr = 0;
 	self->rsp_name = 0;
@@ -563,7 +544,7 @@ mac_soft_ring_poll:entry
 mac_soft_ring_poll:entry /self->rspoll_sr/
 {
 	transition_rx_sr_poll(timestamp, self->rspoll_name, self->rspoll_sr,
-	    STATE_RX_SR_IDLE);
+	    STATE_IDLE);
 
 	self->rspoll_sr = 0;
 	self->rspoll_name = 0;
@@ -598,7 +579,7 @@ mac_tx_soft_ring_drain:entry
 mac_tx_soft_ring_drain:return /self->tx_sr_drain/
 {
 	transition_tx_sr_drain(timestamp, self->tx_sr_drain_name,
-	    self->tx_sr_drain, STATE_TX_SR_IDLE);
+	    self->tx_sr_drain, STATE_IDLE);
 	self->tx_sr_drain = 0;
 	self->tx_sr_drain_name = 0;
 }
@@ -624,7 +605,7 @@ mac_tx_soft_ring_process:entry
 mac_tx_soft_ring_process:return /self->tx_sr_proc/
 {
 	transition_tx_sr_proc(timestamp, self->tx_sr_proc_name,
-	    self->tx_sr_proc, STATE_TX_SR_IDLE);
+	    self->tx_sr_proc, STATE_IDLE);
 	self->tx_sr_proc = 0;
 	self->tx_sr_proc_name = 0;
 }
@@ -660,7 +641,7 @@ mac_rx_srs_process:entry
 mac_rx_srs_process:return /self->rx_srs_proc/
 {
 	transition_rx_srs_proc(timestamp, self->rx_srs_proc_name,
-	    self->rx_srs_proc, STATE_RX_SRS_IDLE);
+	    self->rx_srs_proc, STATE_IDLE);
 	self->rx_srs_proc = 0;
 	self->rx_srs_proc_name = 0;
 }
@@ -687,7 +668,7 @@ mac_rx_srs_drain:entry
 mac_rx_srs_drain:return /self->rx_srs_drain/
 {
 	transition_rx_srs_drain(timestamp, self->rx_srs_drain_name,
-	    self->rx_srs_drain, STATE_RX_SRS_IDLE);
+	    self->rx_srs_drain, STATE_IDLE);
 	self->rx_srs_drain = 0;
 	self->rx_srs_drain_name = 0;
 }
