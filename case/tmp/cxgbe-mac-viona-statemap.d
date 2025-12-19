@@ -2,6 +2,7 @@
 #pragma D option switchrate=500hz
 
 #define	LINK_FILT	"ca"
+#define T_WAKEABLE	0x0002
 
 typedef enum {
 	STATE_IDLE = 0,
@@ -47,6 +48,11 @@ typedef enum {
 	STATE_RX_VIONA_FREE,
 
 	STATE_TX_VIONA_PROC,
+	STATE_OFF_CPU,
+
+	STATE_ON_CPU,
+	STATE_OFF_CPU_BLOCKED,
+	STATE_OFF_CPU_WAITING,
 
 	STATE_MAX,
 } state_t;
@@ -113,6 +119,11 @@ BEGIN {
 	STATE_METADATA(STATE_RX_VIONA_FREE, "rx-viona-free", "#024D14");
 
 	STATE_METADATA(STATE_TX_VIONA_PROC, "tx-viona-proc", "#E0800B");
+	STATE_METADATA(STATE_OFF_CPU, "off-cpu", "#C44545");
+
+	STATE_METADATA(STATE_ON_CPU, "on-cpu", "#DAF7A6");
+	STATE_METADATA(STATE_OFF_CPU_WAITING, "off-cpu-waiting", "#f9f9f9");
+	STATE_METADATA(STATE_OFF_CPU_BLOCKED, "off-cpu-blocked", "#C70039");
 
 	STATE_METADATA(STATE_MAX, "--", "#000000");
 
@@ -631,6 +642,59 @@ viona_rx_common:return /self->rxv_ring/
 	self->rxv_name = 0;
 }
 
+/* viona_rx_common:entry */
+/* { */
+/* 	this->link = args[0]->vr_link; */
+/* 	this->mci_name = */
+/* 	    stringof(((mac_client_impl_t *)this->link->l_mch)->mci_name); */
+
+/* 	if (strstr(this->mci_name, LINK_FILT) != NULL) { */
+/* 		self->rxv_ring = arg0; */
+/* 		self->rxv_name = this->mci_name; */
+/* 		self->rxv_proc_ts = timestamp; */
+/* 	} */
+/* } */
+
+/* viona_intr_ring:entry /self->rxv_ring/ */
+/* { */
+/* 	self->rxv_intr_ts = timestamp; */
+/* } */
+
+/* viona_intr_ring:return /self->rxv_ring/ */
+/* { */
+/* 	self->rxv_free_ts = timestamp; */
+/* } */
+
+/* #define	transition_rx_viona_t(_time, _name, _addr, _state, _npkts, _ndrop)	\ */
+/* 	printf("{ \"time\": \"%d\", \"entity\": \"rx-viona-%s-0x%p\", \"state\": %u, \"tag\": \"rxv-res-%u-%u\" }\n", \ */
+/* 	    _time - start, _name, _addr, _state, _npkts, _ndrop) */
+
+/* viona-rx /self->rxv_ring/ */
+/* { */
+/* 	this->ts = timestamp; */
+
+/* 	if (!rxv_res[arg1, arg2]) { */
+/* 		rxv_good[arg1, arg2] = 1; */
+/* 		printf("{ \"state\": %u, \"tag\": \"rxv-res-%u-%u\", \"good\": \"%u\", \"bad\": \"%u\" }\n", */
+/* 		    STATE_RX_VIONA_PROC, arg1, arg2, arg1, arg2); */
+/* 	} */
+
+/* 	transition_rx_viona_t(self->rxv_proc_ts, self->rxv_name, self->rxv_ring, */
+/* 	    STATE_RX_VIONA_PROC, arg1, arg2); */
+/* 	transition_rx_viona(self->rxv_intr_ts, self->rxv_name, self->rxv_ring, */
+/* 	    STATE_RX_VIONA_INTR); */
+/* 	transition_rx_viona(self->rxv_free_ts, self->rxv_name, self->rxv_ring, */
+/* 	    STATE_RX_VIONA_FREE); */
+/* 	transition_rx_viona(this->ts, self->rxv_name, self->rxv_ring, */
+/* 	    STATE_IDLE); */
+
+/* 	self->rxv_ring = 0; */
+/* 	self->rxv_name = 0; */
+/* 	self->rxv_proc_ts = 0; */
+/* 	self->rxv_intr_ts = 0; */
+/* 	self->rxv_free_ts = 0; */
+/* } */
+
 #undef transition_rx_viona
 
 /*
@@ -649,6 +713,15 @@ viona_ring_disable_notify:entry
 	    stringof(((mac_client_impl_t *)this->link->l_mch)->mci_name);
 
 	if (strstr(this->mci_name, LINK_FILT) != NULL) {
+		/*
+		 * The Tx ring is driven by a single worker thread so use this
+		 * thread-local var to track off-cpu events of the worker.
+		 *
+		 * Use 1 to indicate it was processing when it went off-cpu and
+		 * 2 to indicate it was idle.
+		 */
+		self->txv_worker = 1;
+
 		self->txv_ring = arg0;
 		self->txv_name = this->mci_name;
 
@@ -659,14 +732,47 @@ viona_ring_disable_notify:entry
 
 viona_ring_enable_notify:entry /self->txv_ring/
 {
+	self->txv_worker = 2;
+
 	transition_tx_viona(timestamp, self->txv_name, self->txv_ring,
 	    STATE_IDLE);
 
-	self->txv_ring = 0;
-	self->txv_name = 0;
+	/* self->txv_ring = 0; */
+	/* self->txv_name = 0; */
+}
+
+off-cpu /self->txv_worker/
+{
+	transition_tx_viona(timestamp, self->txv_name, self->txv_ring,
+	    STATE_OFF_CPU);
+}
+
+on-cpu /self->txv_worker/
+{
+	this->state = self->txv_worker == 1 ? STATE_TX_VIONA_PROC : STATE_IDLE;
+
+	transition_tx_viona(timestamp, self->txv_name, self->txv_ring,
+	    this->state);
 }
 
 #undef transition_tx_viona
+
+#define	transition_bhyve(_time, _name, _state)		\
+	printf("{ \"time\": \"%d\", \"entity\": \"bhyve-%s\", \"state\": %u }\n", \
+	    _time - start, _name, _state)
+
+on-cpu /execname == "bhyve"/
+{
+	transition_bhyve(timestamp, curpsinfo->pr_psargs, STATE_ON_CPU);
+}
+
+off-cpu /execname == "bhyve"/
+{
+	this->state = curthread->t_flag & T_WAKEABLE ?
+	STATE_OFF_CPU_WAITING : STATE_OFF_CPU_BLOCKED;
+
+	transition_bhyve(timestamp, curpsinfo->pr_psargs, this->state);
+}
 
 tick-1sec
 /(timestamp - start) > (2 * 1000000000)/
