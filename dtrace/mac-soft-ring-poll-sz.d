@@ -136,10 +136,19 @@ mac_soft_ring_poll:return
 	@["mblk chain total bytes"] = quantize(this->size);
 
 	if (this->size > this->bytes_to_pickup) {
+		@s["max size"] = max(this->size);
 		@lq["total bytes > bytes_to_pickup"] = lquantize(this->size,
 		    150000, 250000, 10000);
 		@c["total bytes > bytes_to_pickup"] = count();
 	} else {
 		@c["total bytes <= bytes_to_pickup"] = count();
 	}
+}
+
+END
+{
+	printa(@);
+	printa(@lq);
+	printa(@c);
+	printa(@s);
 }
