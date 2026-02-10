@@ -1,5 +1,6 @@
 /*
- * Track various aspects of SRS fanout hashing and viona vring hashing.
+ * Track various aspects of SRS fanout hashing and viona vring hashing. Tracks
+ * only IPv4 traffic.
  */
 viona_rx_common:entry
 {
@@ -11,9 +12,9 @@ viona_rx_common:entry
 }
 
 /*
- * This tracks what we see as the "top" mblk in a given chain.
+ * Track what we see as the "top" mblk when receiving a chain.
  */
-viona_rx_common:entry /this->etype == 0x800/
+viona_rx_common:entry /this->mp->b_next != 0 && this->etype == 0x800/
 {
 	this->vring = args[0];
 	this->b_rptr += 14;	/* skip ether */
@@ -42,9 +43,11 @@ mac_rx_soft_ring_process:entry /args[1]->s_ring_first == NULL && args[1]->s_ring
 }
 
 /*
- *
  * Use the viona-pkt-rx probe to inspect what 4-tuples are crossing each vring.
  * We should never see a unique 4-tuple on more than one vring.
+ *
+ * This probe fires on each individual mblk in the chain, so we don't need to
+ * follow b_next.
  */
 viona-pkt-rx
 {
@@ -72,13 +75,27 @@ viona-pkt-rx /this->etype == 0x800/
 }
 
 END {
+	printf("=== callstacks for viona_rx_common()\n");
 	printa(@stacks);
 	printf("\n");
+
+	printf("=== length of softring queue upon drain\n");
 	printa(@hist);
 	printf("\n");
-	printa("0x%p %s %@u\n", @sr);
+
+	printf("=== mac softring distribution\n");
+	printf("%-18s %-40s %-12s\n", "SOFTRING", "NAME", "PACKETS");
+	printa("0x%p %-40s %@u\n", @sr);
 	printf("\n");
+
+	printf("=== vring distribution\n");
+	printf("%-16s %-6s %-16s %-6s %-4s %-12s\n", "SRC", "SPORT",
+	    "DST", "DPORT", "IDX", "BYTES");
 	printa("%-16s %-6u %-16s %-6u %-4u %@u\n", @vrings);
-	printf("\n=== TOP\n");
-	printa("%-16s %-6u %-16s %-6u %-4u [0x%p] %@u\n", @top);
+	printf("\n");
+
+	printf("=== Top mblk in chain\n");
+	printf("%-16s %-6s %-16s %-6s %-4s %-18s %-12s\n", "SRC", "SPORT",
+	    "DST", "DPORT", "IDX", "VRING", "COUNT");
+	printa("%-16s %-6u %-16s %-6u %-4u 0x%p %@u\n", @top);
 }
