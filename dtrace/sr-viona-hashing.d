@@ -1,8 +1,34 @@
 /*
  * Track various aspects of SRS fanout hashing and viona vring hashing.
  */
-viona_rx_common:entry {
+viona_rx_common:entry
+{
 	@stacks[stack()] = count();
+
+	this->mp = (mblk_t *)arg1;
+	this->b_rptr = this->mp->b_rptr;
+	this->etype = htons(*(uint16_t *)(this->b_rptr + 12));
+}
+
+/*
+ * This tracks what we see as the "top" mblk in a given chain.
+ */
+viona_rx_common:entry /this->etype == 0x800/
+{
+	this->vring = args[0];
+	this->b_rptr += 14;	/* skip ether */
+	this->b_rptr += 12;	/* start of src ip */
+	this->src = inet_ntoa((ipaddr_t *)this->b_rptr);
+	this->b_rptr += 4;	/* start of dst ip */
+	this->dst = inet_ntoa((ipaddr_t *)this->b_rptr);
+	this->b_rptr += 4;	/* start of src port */
+	this->sp = htons(*((uint16_t *)this->b_rptr));
+	this->b_rptr +=2;	/* start of dst port */
+	this->dp = htons(*((uint16_t *)this->b_rptr));
+
+	@top[this->src, this->sp, this->dst, this->dp, this->vring->vr_index,
+	    this->vring] = count();
+
 }
 
 mac_rx_soft_ring_drain:entry {
@@ -53,4 +79,6 @@ END {
 	printa("0x%p %s %@u\n", @sr);
 	printf("\n");
 	printa("%-16s %-6u %-16s %-6u %-4u %@u\n", @vrings);
+	printf("\n=== TOP\n");
+	printa("%-16s %-6u %-16s %-6u %-4u [0x%p] %@u\n", @top);
 }
