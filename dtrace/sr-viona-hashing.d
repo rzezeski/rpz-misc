@@ -33,13 +33,23 @@ viona_rx_common:entry /this->mp->b_next != 0 && this->etype == 0x800/
 }
 
 mac_rx_soft_ring_drain:entry {
-	@sr[args[0], args[0]->s_ring_name] = sum(args[0]->s_ring_count);
+	this->mcip = args[0]->s_ring_set->srs_mcip;
+	this->client = stringof(this->mcip->mci_name);
+	this->mac = stringof(this->mcip->mci_mip->mi_name);
+
+	@sr[this->mac, this->client, args[0], stringof(args[0]->s_ring_name)] =
+	    sum(args[0]->s_ring_count);
 	@hist["drain count"] = quantize(args[0]->s_ring_count);
 }
 
 mac_rx_soft_ring_process:entry /args[1]->s_ring_first == NULL && args[1]->s_ring_set->srs_rx.sr_poll_pkt_cnt <= 1/ {
+	this->mcip = args[1]->s_ring_set->srs_mcip;
+	this->client = stringof(this->mcip->mci_name);
+	this->mac = stringof(this->mcip->mci_mip->mi_name);
+
 	@counts["SR single pkt"] = count();
-	@sr[args[1], args[1]->s_ring_name] = sum(1);
+	@sr[this->mac, this->client, args[1], stringof(args[1]->s_ring_name)] =
+	sum(1);
 }
 
 /*
@@ -84,8 +94,9 @@ END {
 	printf("\n");
 
 	printf("=== mac softring distribution\n");
-	printf("%-18s %-40s %-12s\n", "SOFTRING", "NAME", "PACKETS");
-	printa("0x%p %-40s %@u\n", @sr);
+	printf("%-12s %-12s %-18s %-40s %-12s\n", "MAC", "CLIENT", "SOFTRING",
+	    "NAME", "PACKETS");
+	printa("%-12s %-12s 0x%p %-40s %@u\n", @sr);
 	printf("\n");
 
 	printf("=== vring distribution\n");
