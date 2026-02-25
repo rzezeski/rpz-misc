@@ -1,3 +1,7 @@
+# Generate a report that shows the stat-by-stat delta of two kstat outputs
+# appended to the same file. Specifically focusing on cxbge Rx SRS interrupt and
+# polling statistics.
+#
 # Assumes input from:
 #
 #    kstat -p -p cxgbe<N>::mac_rx_hwlane*:
