@@ -10,8 +10,10 @@
  * Also track the the total number of "good" receives (successful) and drops on
  * the rx queue. A drop happens when mac has more packets to deliver than the
  * viona rx queue has available.
+ *
+ * Tx queues have an odd vr_index, Rx even.
  */
-viona_ring_disable_notify:entry
+viona_ring_disable_notify:entry /args[0]->vr_index % 2 == 1/
 {
 	this->link = args[0]->vr_link;
 	self->tx =
@@ -20,7 +22,10 @@ viona_ring_disable_notify:entry
 
 viona_ring_num_avail:return /self->tx != 0/
 {
-	@t["tx", self->tx] = lquantize(arg1, 1, 48, 8);
+	@t["tx", self->tx] = lquantize(arg1, 1, 2048, 64);
+	if (arg1 == 1) {
+		@totals[self->tx, "tx one"] = sum(1);
+	}
 }
 
 viona_ring_enable_notify:entry /self->tx != 0/
@@ -37,7 +42,7 @@ viona_rx_common:entry
 
 viona_ring_num_avail:return /self->rx != 0/
 {
-	@["rx", self->rx] = lquantize(arg1, 1, 1024, 64);
+	@["rx", self->rx] = lquantize(arg1, 1, 2048, 64);
 }
 
 viona_rx_common:return /self->rx != 0/

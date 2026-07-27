@@ -8,7 +8,8 @@ viona_recv_merged:entry
 {
 	@calls[probefunc] = count();
 	@l_features[args[0]->vr_link->l_features] = count();
-	@["bytes"] = quantize(msgsize(args[1]));
+	/* @["bytes"] = quantize(msgsize(args[1])); */
+	@["bytes"] = lquantize(msgsize(args[1]), 0, 66000, 1000);
 	self->t = 1;
 }
 

@@ -16,6 +16,7 @@ typedef enum {
 	STATE_RX_IQ_POLL_OFF,
 
 	STATE_TX_SEND_PROC,
+	STATE_TX_SEND_FULL,
 
 	STATE_TX_RECY_CHECK,
 	STATE_TX_RECY_PROC,
@@ -37,8 +38,15 @@ typedef enum {
 
 	STATE_RX_SRS_PROC,
 	STATE_RX_SRS_DRAIN,
+
+	STATE_SOCK_FLOWCTRL_OFF,
+	STATE_SOCK_FLOWCTRL_ON,
+
 	STATE_MAX,
 } state_t;
+
+/* #define V4_PART_OF_V6(v6) v6.s6_addr32[3] */
+#define V4_PART_OF_V6(v6) ((v6)._S6_un._S6_u32[3])
 
 #define STATE_METADATA(_state, _str, _color)				\
 	printf("\t\t\"%s\": {\"value\": %d, \"color\": \"%s\" }%s\n",	\
@@ -72,6 +80,7 @@ BEGIN {
 	STATE_METADATA(STATE_RX_IQ_POLL_OFF, "poll-off", "#750B72");
 
 	STATE_METADATA(STATE_TX_SEND_PROC, "tx-send-proc", "#E0800B");
+	STATE_METADATA(STATE_TX_SEND_FULL, "tx-send-full", "#EB4034");
 
 	STATE_METADATA(STATE_TX_RECY_CHECK, "tx-recy-check", "#8EBD99");
 	STATE_METADATA(STATE_TX_RECY_PROC, "tx-recy-proc", "#10B537");
@@ -93,6 +102,9 @@ BEGIN {
 
 	STATE_METADATA(STATE_RX_SRS_DRAIN, "rx-srs-drain", "#19F7F4");
 	STATE_METADATA(STATE_RX_SRS_PROC, "rx-srs-proc", "#9E19E6");
+
+	STATE_METADATA(STATE_SOCK_FLOWCTRL_OFF, "sock-fctrl-off", "#BDBBBB");
+	STATE_METADATA(STATE_SOCK_FLOWCTRL_ON, "sock-fctrl-on", "#EB4034");
 
 	STATE_METADATA(STATE_MAX, "--", "#000000");
 
@@ -267,10 +279,13 @@ t4_eth_tx:entry
 	    STATE_TX_SEND_PROC);
 }
 
+#define	EQ_CORKED	(1 << 4)
+
 t4_eth_tx:return /self->ts_txq/
 {
-	transition_tx_send(timestamp, self->ts_name, self->ts_txq,
-	    STATE_IDLE);
+	this->state = arg1 == EQ_CORKED ? STATE_TX_SEND_FULL : STATE_IDLE;
+
+	transition_tx_send(timestamp, self->ts_name, self->ts_txq, this->state);
 
 	self->ts_txq = 0;
 	self->ts_name = 0;
@@ -674,6 +689,70 @@ mac_rx_srs_drain:return /self->rx_srs_drain/
 }
 
 #undef transition_rx_srs_drain
+
+#define	transition_socket(_time, _name, _addr, _state)		\
+	printf("{ \"time\": \"%d\", \"entity\": \"socket-%s-0x%p\", \"state\": %u }\n", \
+	    _time - start, _name, _addr, _state);
+
+so_queue_msg_impl:entry
+{
+	this->connp = (conn_t *)(args[0]->so_proto_handle);
+	/* connp[this->connp] = 1; */
+
+	this->laddr = V4_PART_OF_V6(this->connp->connua_v6addr.connua_laddr);
+
+	/*
+	 * 0x6603000a = 10.0.03.102
+	 * 0x6403000a = 10.0.03.100
+	 *
+	 */
+	if ((this->laddr == 0x6603000a) || (this->laddr == 0x6403000a)) {
+		self->sock_sonode = args[0];
+		self->sock_laddr = (this->laddr == 0x6603000a) ? "10.0.03.102"
+		    : "10.0.03.100";
+		/* self->sock_laddr = this->laddr; */
+	}
+}
+
+so_queue_msg_impl:return /self->sock_sonode/
+{
+	if (!self->sock_sonode->so_flowctrld) {
+		transition_socket(timestamp, self->sock_laddr,
+		    self->sock_sonode, STATE_SOCK_FLOWCTRL_ON);
+	}
+
+	self->sock_sonode = 0;
+	self->sock_laddr = 0;
+}
+
+so_check_flow_control:entry
+{
+	this->connp = (conn_t *)args[0]->so_proto_handle;
+	this->laddr = V4_PART_OF_V6(this->connp->connua_v6addr.connua_laddr);
+
+	/*
+	 * 0x6603000a = 10.0.03.102
+	 * 0x6403000a = 10.0.03.100
+	 *
+	 */
+	if (this->laddr == 0x6603000a || this->laddr == 0x6403000a) {
+		self->sock_sonode = args[0];
+		self->sock_laddr = this->laddr == 0x6603000a ? "10.0.03.102"
+		    : "10.0.03.100";
+	}
+}
+
+so_check_flow_control:return /self->sock_sonode/ {
+	if (!self->sock_sonode->so_flowctrld) {
+		transition_socket(timestamp, self->sock_laddr,
+		    self->sock_sonode, STATE_SOCK_FLOWCTRL_OFF);
+	}
+
+	self->sock_sonode = 0;
+	self->sock_laddr = 0;
+}
+
+#undef transition_socket
 
 tick-1sec
 /(timestamp - start) > (2 * 1000000000)/
